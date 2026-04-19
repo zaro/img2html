@@ -22,6 +22,59 @@ export interface AgentResult {
   error?: string;
 }
 
+function serializeMessages(messages: BaseMessage[]): object[] {
+  return messages.map((msg) => {
+    const base: Record<string, unknown> = {
+      type: msg._getType(),
+    };
+
+    if (msg.content) {
+      base.content = msg.content;
+    }
+
+    if (msg.name) {
+      base.name = msg.name;
+    }
+
+    if (msg.additional_kwargs) {
+      base.additional_kwargs = msg.additional_kwargs;
+    }
+
+    if (msg.response_metadata) {
+      base.response_metadata = msg.response_metadata;
+    }
+
+    if ("tool_calls" in msg && msg.tool_calls) {
+      base.tool_calls = msg.tool_calls;
+    }
+
+    if (msg._getType() === "tool") {
+      const toolMsg = msg as ToolMessage;
+      base.tool_call_id = toolMsg.tool_call_id;
+      base.name = toolMsg.name;
+    }
+
+    return base;
+  });
+}
+
+function writeLogFile(logFile: string, messages: BaseMessage[]): void {
+  try {
+    const logDir = path.dirname(logFile);
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    const logData = {
+      timestamp: new Date().toISOString(),
+      messageCount: messages.length,
+      messages: serializeMessages(messages),
+    };
+    fs.writeFileSync(logFile, JSON.stringify(logData, null, 2), "utf-8");
+  } catch (error) {
+    console.error(`Warning: Failed to write log file: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 function getSystemPrompt(stack: Stack): string {
   const base = `You are a coding agent that's an expert at building front-ends.
 
@@ -133,8 +186,9 @@ export async function runAgent(options: {
   additionalPrompt?: string;
   variantIndex?: number;
   imageScalerOptions?: ImageScalerOptions;
+  logFile?: string;
 }): Promise<AgentResult> {
-  const { imagePath, stack, modelString, outputDir, additionalPrompt, variantIndex, imageScalerOptions } = options;
+  const { imagePath, stack, modelString, outputDir, additionalPrompt, variantIndex, imageScalerOptions, logFile } = options;
 
   console.error(`\n${"=".repeat(60)}`);
   console.error(`Generating variant ${variantIndex || 1}`);
@@ -229,6 +283,10 @@ export async function runAgent(options: {
 
           fs.writeFileSync(outPath, finalContent, "utf-8");
 
+          if (logFile) {
+            writeLogFile(logFile, messages);
+          }
+
           console.error(`\n\n${"=".repeat(60)}`);
           console.error(`Output written to: ${outPath}`);
           console.error(`${"=".repeat(60)}\n`);
@@ -244,12 +302,20 @@ export async function runAgent(options: {
       }
     }
 
+    if (logFile) {
+      writeLogFile(logFile, messages);
+    }
+
     return {
       success: false,
       iterations,
       error: "Max iterations reached without producing final output",
     };
   } catch (error) {
+    if (logFile) {
+      writeLogFile(logFile, messages);
+    }
+
     return {
       success: false,
       iterations,

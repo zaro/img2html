@@ -13,6 +13,7 @@ interface CliOptions {
   prompt?: string;
   maxWidth?: number;
   maxHeight?: number;
+  logFile?: string;
 }
 
 async function main() {
@@ -30,8 +31,9 @@ async function main() {
     .option("-p, --prompt <text>", "Additional instructions for the agent")
     .option("--max-width <pixels>", "Maximum width to scale image to (maintains aspect ratio)", (val) => val ? parseInt(val, 10) : undefined)
     .option("--max-height <pixels>", "Maximum height to scale image to (maintains aspect ratio)", (val) => val ? parseInt(val, 10) : undefined)
+    .option("--log-file <path>", "File path to write raw agent conversation to")
     .action(async (imagePath: string, options: Partial<CliOptions>) => {
-      const { stack, model, variants, output, prompt, maxWidth, maxHeight } = options;
+      const { stack, model, variants, output, prompt, maxWidth, maxHeight, logFile } = options;
 
       if (!["html_css", "tailwind"].includes(stack || "")) {
         console.error('Error: Stack must be "html_css" or "tailwind"');
@@ -58,6 +60,7 @@ async function main() {
       console.error(`  Output: ${resolvedOutput}`);
       if (maxWidth) console.error(`  Max Width: ${maxWidth}`);
       if (maxHeight) console.error(`  Max Height: ${maxHeight}`);
+      if (logFile) console.error(`  Log File: ${logFile}`);
       if (prompt) console.error(`  Additional prompt: ${prompt}`);
       console.error("");
 
@@ -65,6 +68,16 @@ async function main() {
       let failureCount = 0;
 
       for (let i = 1; i <= (variants || 1); i++) {
+        let variantLogFile: string | undefined;
+        if (logFile) {
+          if (variants && variants > 1) {
+            const baseName = logFile.replace(/\.json$/, "");
+            variantLogFile = `${baseName}-${i}.json`;
+          } else {
+            variantLogFile = logFile.endsWith(".json") ? logFile : `${logFile}.json`;
+          }
+        }
+
         const result = await runAgent({
           imagePath,
           stack: (stack || "tailwind") as Stack,
@@ -73,6 +86,7 @@ async function main() {
           additionalPrompt: prompt,
           variantIndex: variants && variants > 1 ? i : undefined,
           imageScalerOptions: (maxWidth || maxHeight) ? { maxWidth, maxHeight } : undefined,
+          logFile: variantLogFile,
         });
 
         if (result.success) {
