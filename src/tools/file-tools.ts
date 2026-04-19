@@ -2,19 +2,28 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import * as fs from "fs";
 import * as path from "path";
-import { dirname } from "path";
 
 export interface FileState {
   path: string;
   content: string;
 }
 
-export function createCreateFileTool(fileState: { current: FileState | null }) {
+function resolvePath(outputDir: string, filePath: string): string {
+  const resolvedPath = path.resolve(outputDir, filePath);
+  const resolvedOutputDir = path.resolve(outputDir);
+  const isUnderOutputDir = resolvedPath.startsWith(resolvedOutputDir + path.sep) || resolvedPath === resolvedOutputDir;
+  if (!isUnderOutputDir) {
+    throw new Error(`Security: Path "${filePath}" escapes output directory`);
+  }
+  return resolvedPath;
+}
+
+export function createCreateFileTool(fileState: { current: FileState | null }, outputDir: string) {
   return tool(
     async ({ path: filePath, content }: { path: string; content: string }) => {
-      const resolvedPath = path.resolve(filePath);
-      const dir = dirname(resolvedPath);
+      const resolvedPath = resolvePath(outputDir, filePath);
 
+      const dir = path.dirname(resolvedPath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
@@ -43,7 +52,7 @@ export function createCreateFileTool(fileState: { current: FileState | null }) {
   );
 }
 
-export function createEditFileTool(fileState: { current: FileState | null }) {
+export function createEditFileTool(fileState: { current: FileState | null }, outputDir: string) {
   return tool(
     async ({ path: filePath, old_text, new_text, count }: { path: string; old_text: string; new_text: string; count: number | null }) => {
       if (!fileState.current) {
@@ -53,7 +62,7 @@ export function createEditFileTool(fileState: { current: FileState | null }) {
         });
       }
 
-      const resolvedPath = path.resolve(filePath);
+      const resolvedPath = resolvePath(outputDir, filePath);
       let content = fileState.current.content;
 
       if (!content.includes(old_text)) {

@@ -196,8 +196,8 @@ export async function runAgent(options: {
   console.error(`${"=".repeat(60)}\n`);
 
   const fileState: { current: FileState | null } = { current: null };
-  const createFileTool = createCreateFileTool(fileState);
-  const editFileTool = createEditFileTool(fileState);
+  const createFileTool = createCreateFileTool(fileState, outputDir);
+  const editFileTool = createEditFileTool(fileState, outputDir);
   const tools = [createFileTool, editFileTool];
 
   let model: BaseChatModel;
@@ -274,14 +274,7 @@ export async function runAgent(options: {
         }
       } else {
         if (fileState.current) {
-          const finalContent = fileState.current.content;
-          const outPath = variantIndex && variantIndex > 1
-            ? path.join(outputDir, `variant-${variantIndex}`, "index.html")
-            : path.join(outputDir, "index.html");
-          const finalDir = path.dirname(outPath);
-          ensureDir(finalDir);
-
-          fs.writeFileSync(outPath, finalContent, "utf-8");
+          const outPath = fileState.current.path;
 
           if (logFile) {
             writeLogFile(logFile, messages);
@@ -294,7 +287,7 @@ export async function runAgent(options: {
           return {
             success: true,
             outputPath: outPath,
-            content: finalContent,
+            content: fileState.current.content,
             iterations,
           };
         }

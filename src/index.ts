@@ -3,6 +3,7 @@
 import { Command } from "commander";
 import { runAgent, type Stack } from "./agent/img2html-agent.js";
 import * as path from "path";
+import * as fs from "fs";
 import { fileURLToPath } from "url";
 
 interface CliOptions {
@@ -14,6 +15,60 @@ interface CliOptions {
   maxWidth?: number;
   maxHeight?: number;
   logFile?: string;
+}
+
+interface GenParams {
+  imagePath: string;
+  provider: string;
+  model: string;
+  stack: Stack;
+  maxWidth?: number;
+  maxHeight?: number;
+  additionalPrompt?: string;
+  timestamp: string;
+}
+
+function writeGenParams(outputDir: string, params: GenParams): void {
+  try {
+    const genParamsPath = path.join(outputDir, "gen-params.json");
+    fs.writeFileSync(genParamsPath, JSON.stringify(params, null, 2), "utf-8");
+    console.error(`Generation params written to: ${genParamsPath}`);
+  } catch (error) {
+    console.error(`Warning: Failed to write gen-params.json: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function copyImageToOutput(imagePath: string, outputDir: string): Promise<string | undefined> {
+  try {
+    const isUrl = imagePath.startsWith("http://") || imagePath.startsWith("https://");
+    const ext = path.extname(imagePath);
+    const fileName = isUrl
+      ? `input-image${ext}`
+      : `input-image${ext}`;
+    const destPath = path.join(outputDir, fileName);
+
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    if (isUrl) {
+      const response = await fetch(imagePath);
+      if (!response.ok) {
+        console.error(`Warning: Failed to fetch image from URL: ${response.statusText}`);
+        return undefined;
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
+      fs.writeFileSync(destPath, buffer);
+    } else {
+      fs.copyFileSync(imagePath, destPath);
+    }
+
+    console.error(`Original image copied to: ${destPath}`);
+    return destPath;
+  } catch (error) {
+    console.error(`Warning: Failed to copy image: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
 }
 
 async function main() {
@@ -92,6 +147,24 @@ async function main() {
         if (result.success) {
           successCount++;
           console.error(`\nVariant ${i} completed successfully in ${result.iterations} iterations`);
+
+          const [provider, modelName] = (model || "openai:gpt-4o").split(":");
+          const variantOutputDir = variants && variants > 1
+            ? path.join(resolvedOutput, `variant-${i}`)
+            : resolvedOutput;
+
+          await copyImageToOutput(imagePath, variantOutputDir);
+
+          writeGenParams(variantOutputDir, {
+            imagePath,
+            provider,
+            model: modelName,
+            stack: (stack || "tailwind") as Stack,
+            maxWidth,
+            maxHeight,
+            additionalPrompt: prompt,
+            timestamp: new Date().toISOString(),
+          });
         } else {
           failureCount++;
           console.error(`\nVariant ${i} failed: ${result.error}`);
