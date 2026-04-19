@@ -126,7 +126,7 @@ export function formatCost(cost: number | null): string {
   if (cost === null) {
     return "unknown";
   }
-  return `$${cost.toFixed(3)} USD`;
+  return `$${cost.toFixed(5)} USD`;
 }
 
 export function formatTokenCount(count: number): string {
