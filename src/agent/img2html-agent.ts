@@ -1,7 +1,7 @@
 import { initChatModel } from "langchain";
-import { createAgent, tool, HumanMessage, BaseMessage, ToolMessage } from "langchain";
+import { createAgent, tool, HumanMessage, BaseMessage, ToolMessage, AIMessage } from "langchain";
 import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
-import type { LLMResult } from "@langchain/core/outputs";
+import type { LLMResult, ChatGeneration } from "@langchain/core/outputs";
 import { z } from "zod";
 import { loadImageAsDataUrl, type ImageScalerOptions } from "../utils/image.js";
 import {
@@ -9,6 +9,8 @@ import {
   createTokenAccumulator,
   addIterationTokens,
 } from "../types/token-usage.js";
+import * as path from "path";
+import * as fs from "fs";
 
 const MAX_ITERATIONS = 20;
 
@@ -23,68 +25,130 @@ export interface AgentResult {
   error?: string;
 }
 
-class TokenUsageCallbackHandler extends BaseCallbackHandler {
-  name = "token_usage_handler";
+class AgentCallbackHandler extends BaseCallbackHandler {
+  name = "agent_callback_handler";
 
   calls: Array<{ promptTokens: number; completionTokens: number; totalTokens: number }> = [];
+  log: Array<{
+    step: number;
+    direction: "to_llm" | "from_llm";
+    messages: BaseMessage[];
+    timestamp: Date;
+    runId?: string;
+  }> = [];
+
+  async handleChatModelStart(
+    _serialized: Record<string, any>,
+    messages: BaseMessage[][],
+    runId: string,
+    _parentRunId?: string
+  ) {
+    const inputMessages = Array.isArray(messages) ? messages[0] ?? [] : [];
+    this.log.push({
+      step: this.log.length + 1,
+      direction: "to_llm",
+      messages: inputMessages,
+      timestamp: new Date(),
+      runId
+    });
+  }
 
   async handleLLMEnd(output: LLMResult) {
-    if (!output.llmOutput) {
-      return;
+    const tokenUsage = output.llmOutput?.tokenUsage;
+    if (tokenUsage) {
+      const promptTokens = tokenUsage.promptTokens ?? 0;
+      const completionTokens = tokenUsage.completionTokens ?? 0;
+      const totalTokens = tokenUsage.totalTokens ?? (promptTokens + completionTokens);
+      this.calls.push({ promptTokens, completionTokens, totalTokens });
+      console.error(`\n[API Call #${this.calls.length}] Prompt: ${promptTokens}, Completion: ${completionTokens}, Total: ${totalTokens}`);
     }
-    const tokenUsage = output.llmOutput.tokenUsage;
-    if (!tokenUsage) {
-      return;
+
+    const aiResponses: BaseMessage[] = [];
+    for (const genList of output.generations) {
+      for (const gen of genList) {
+        const chatGen = gen as ChatGeneration;
+        if (chatGen.message) aiResponses.push(chatGen.message);
+      }
     }
-    const promptTokens = tokenUsage.promptTokens ?? 0;
-    const completionTokens = tokenUsage.completionTokens ?? 0;
-    const totalTokens = tokenUsage.totalTokens ?? (promptTokens + completionTokens);
-    this.calls.push({ promptTokens, completionTokens, totalTokens });
-    console.error(`\n[API Call #${this.calls.length}] Prompt: ${promptTokens}, Completion: ${completionTokens}, Total: ${totalTokens}`);
+    if (aiResponses.length > 0) {
+      this.log.push({
+        step: this.log.length + 1,
+        direction: "from_llm",
+        messages: aiResponses,
+        timestamp: new Date()
+      });
+    }
+  }
+
+  async handleToolEnd(output: any) {
+    if (output.toolOutput) {
+      try {
+        const toolMsg = new ToolMessage({
+          content: typeof output.toolOutput === 'string' ? output.toolOutput : JSON.stringify(output.toolOutput),
+          tool_call_id: output.toolCall?.id || output.tool_call_id || "",
+          name: output.tool?.name || output.toolName || "unknown",
+        });
+        this.log.push({
+          step: this.log.length + 1,
+          direction: "from_llm",
+          messages: [toolMsg],
+          timestamp: new Date()
+        });
+      } catch {
+      }
+    }
+  }
+
+  getLogEntries(): Array<{ messages: BaseMessage[]; timestamp: Date }> {
+    return this.log;
   }
 
   reset() {
     this.calls = [];
+    this.log = [];
   }
 }
 
-function serializeMessages(messages: BaseMessage[]): object[] {
-  return messages.map((msg) => {
-    const base: Record<string, unknown> = {
-      type: msg._getType(),
-    };
+function serializeMessages(entries: Array<{ messages: BaseMessage[]; timestamp: Date }>): object[] {
+  return entries.flatMap(entry =>
+    entry.messages.map(msg => {
+      const base: Record<string, unknown> = {
+        type: msg._getType(),
+        timestamp: entry.timestamp.toISOString(),
+      };
 
-    if (msg.content) {
-      base.content = msg.content;
-    }
+      if (msg.content) {
+        base.content = msg.content;
+      }
 
-    if (msg.name) {
-      base.name = msg.name;
-    }
+      if (msg.name) {
+        base.name = msg.name;
+      }
 
-    if (msg.additional_kwargs) {
-      base.additional_kwargs = msg.additional_kwargs;
-    }
+      if (msg.additional_kwargs) {
+        base.additional_kwargs = msg.additional_kwargs;
+      }
 
-    if (msg.response_metadata) {
-      base.response_metadata = msg.response_metadata;
-    }
+      if (msg.response_metadata) {
+        base.response_metadata = msg.response_metadata;
+      }
 
-    if ("tool_calls" in msg && msg.tool_calls) {
-      base.tool_calls = msg.tool_calls;
-    }
+      if ("tool_calls" in msg && msg.tool_calls) {
+        base.tool_calls = msg.tool_calls;
+      }
 
-    if (msg._getType() === "tool") {
-      const toolMsg = msg as ToolMessage;
-      base.tool_call_id = toolMsg.tool_call_id;
-      base.name = toolMsg.name;
-    }
+      if (msg._getType() === "tool") {
+        const toolMsg = msg as ToolMessage;
+        base.tool_call_id = toolMsg.tool_call_id;
+        base.name = toolMsg.name;
+      }
 
-    return base;
-  });
+      return base;
+    })
+  );
 }
 
-function writeLogFile(logFile: string, messages: BaseMessage[]): void {
+function writeLogFile(logFile: string, logEntries: Array<{ messages: BaseMessage[]; timestamp: Date }>): void {
   try {
     const logDir = path.dirname(logFile);
     if (!fs.existsSync(logDir)) {
@@ -92,8 +156,8 @@ function writeLogFile(logFile: string, messages: BaseMessage[]): void {
     }
     const logData = {
       timestamp: new Date().toISOString(),
-      messageCount: messages.length,
-      messages: serializeMessages(messages),
+      messageCount: logEntries.reduce((sum, e) => sum + e.messages.length, 0),
+      messages: serializeMessages(logEntries),
     };
     fs.writeFileSync(logFile, JSON.stringify(logData, null, 2), "utf-8");
   } catch (error) {
@@ -207,9 +271,6 @@ async function initializeModel(modelString: string) {
 
   return initChatModel(modelString, config);
 }
-
-import * as path from "path";
-import * as fs from "fs";
 
 export async function runAgent(options: {
   imagePath: string;
@@ -357,7 +418,7 @@ export async function runAgent(options: {
     systemPrompt: getSystemPrompt(stack),
   });
 
-  const tokenHandler = new TokenUsageCallbackHandler();
+  const callbackHandler = new AgentCallbackHandler();
   let toolCallCount = 0;
 
   const userMessage = new HumanMessage({
@@ -374,9 +435,12 @@ export async function runAgent(options: {
     try {
       streamResult = await agent.stream(
         { messages: [userMessage] },
-        { callbacks: [tokenHandler] }
+        { callbacks: [callbackHandler] }
       );
     } catch (streamError) {
+      if (logFile) {
+        writeLogFile(logFile, callbackHandler.getLogEntries());
+      }
       return {
         success: false,
         iterations: toolCallCount,
@@ -403,6 +467,9 @@ export async function runAgent(options: {
         }
       }
     } catch (iterationError) {
+      if (logFile) {
+        writeLogFile(logFile, callbackHandler.getLogEntries());
+      }
       return {
         success: false,
         iterations: toolCallCount,
@@ -411,19 +478,23 @@ export async function runAgent(options: {
       };
     }
 
-    const totalPromptTokens = tokenHandler.calls.reduce((sum, c) => sum + c.promptTokens, 0);
-    const totalCompletionTokens = tokenHandler.calls.reduce((sum, c) => sum + c.completionTokens, 0);
-    const totalTokensAll = tokenHandler.calls.reduce((sum, c) => sum + c.totalTokens, 0);
+    if (logFile) {
+      writeLogFile(logFile, callbackHandler.getLogEntries());
+    }
+
+    const totalPromptTokens = callbackHandler.calls.reduce((sum, c) => sum + c.promptTokens, 0);
+    const totalCompletionTokens = callbackHandler.calls.reduce((sum, c) => sum + c.completionTokens, 0);
+    const totalTokensAll = callbackHandler.calls.reduce((sum, c) => sum + c.totalTokens, 0);
     console.error("\n\nStream completed");
-    console.error(`Total API calls: ${tokenHandler.calls.length}`);
+    console.error(`Total API calls: ${callbackHandler.calls.length}`);
     console.error(`Total tool calls: ${toolCallCount}`);
     console.error(`Total tokens - Prompt: ${totalPromptTokens}, Completion: ${totalCompletionTokens}, Combined: ${totalTokensAll}`);
 
-    for (let i = 0; i < tokenHandler.calls.length; i++) {
-      const call = tokenHandler.calls[i];
+    for (let i = 0; i < callbackHandler.calls.length; i++) {
+      const call = callbackHandler.calls[i];
       addIterationTokens(tokenAccumulator, i + 1, call.promptTokens, call.completionTokens, 1);
     }
-    tokenAccumulator.totals.apiCalls = tokenHandler.calls.length;
+    tokenAccumulator.totals.apiCalls = callbackHandler.calls.length;
 
     if (fileState.current) {
       const outPath = fileState.current.path;
@@ -448,6 +519,9 @@ export async function runAgent(options: {
       error: "Agent completed without producing output file",
     };
   } catch (error) {
+    if (logFile) {
+      writeLogFile(logFile, callbackHandler.getLogEntries());
+    }
     const errorMessage = error instanceof Error ? error.message : String(error);
     const errorStack = error instanceof Error ? error.stack : undefined;
     console.error(`Agent error: ${errorMessage}`);
