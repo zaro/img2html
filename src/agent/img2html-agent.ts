@@ -4,7 +4,7 @@ import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { createCreateFileTool, createEditFileTool, type FileState } from "../tools/file-tools.js";
 import { loadImageAsDataUrl } from "../utils/image.js";
 import { ensureDir } from "../utils/output.js";
-import { SystemMessage, HumanMessage, AIMessage, BaseMessage, type ToolMessage } from "@langchain/core/messages";
+import { SystemMessage, HumanMessage, AIMessage, BaseMessage, ToolMessage } from "@langchain/core/messages";
 import { type BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { type StructuredTool } from "@langchain/core/tools";
 import * as path from "path";
@@ -143,7 +143,21 @@ export async function runAgent(options: {
   const fileState: { current: FileState | null } = { current: null };
   const createFileTool = createCreateFileTool(fileState);
   const editFileTool = createEditFileTool(fileState);
-  const tools: StructuredTool[] = [createFileTool, editFileTool];
+  const tools = [createFileTool, editFileTool];
+
+  let model: BaseChatModel;
+  let modelWithTools: any;
+
+  try {
+    model = await initializeModel(modelString);
+    modelWithTools = (model as any).bindTools(tools);
+  } catch (error) {
+    return {
+      success: false,
+      iterations: 0,
+      error: `Failed to initialize model: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
 
   let imageDataUrl: string;
   try {
@@ -153,17 +167,6 @@ export async function runAgent(options: {
       success: false,
       iterations: 0,
       error: `Failed to load image: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-
-  let model: BaseChatModel;
-  try {
-    model = await initializeModel(modelString);
-  } catch (error) {
-    return {
-      success: false,
-      iterations: 0,
-      error: `Failed to initialize model: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 
@@ -182,7 +185,7 @@ export async function runAgent(options: {
 
   try {
     while (iterations < MAX_ITERATIONS) {
-      const response = await model.invoke(messages);
+      const response = await modelWithTools!.invoke(messages);
 
       const responseMsg = response as AIMessage;
       messages.push(responseMsg);
@@ -207,9 +210,11 @@ export async function runAgent(options: {
             toolResult = `Invalid tool arguments for ${tc.name}`;
           }
 
-          const toolMsg = new AIMessage({
+          const toolMsg = new ToolMessage({
             content: toolResult,
-          }) as unknown as ToolMessage;
+            tool_call_id: tc.id || `call_${Date.now()}`,
+            name: tc.name,
+          });
           messages.push(toolMsg);
         }
       } else {
