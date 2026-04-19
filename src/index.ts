@@ -38,6 +38,12 @@ function writeGenParams(outputDir: string, params: GenParams): void {
   }
 }
 
+function generateDefaultOutputDir(): string {
+  const now = new Date();
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `out-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+}
+
 async function copyImageToOutput(imagePath: string, outputDir: string): Promise<string | undefined> {
   try {
     const isUrl = imagePath.startsWith("http://") || imagePath.startsWith("https://");
@@ -82,7 +88,7 @@ async function main() {
     .option("-s, --stack <stack>", 'Frontend stack: "html_css" or "tailwind"', process.env.IMG2HTML_STACK || "tailwind")
     .option("-m, --model <model>", 'Model to use (e.g., "openai:gpt-4o", "anthropic:claude-sonnet-4-6", "openrouter:anthropic/claude-3.5-sonnet", "gemini:gemini-2.0-flash", "minimax:minimax")', process.env.IMG2HTML_MODEL || "openai:gpt-4o")
     .option("-v, --variants <number>", "Number of variants to generate", (val) => parseInt(val, 10), parseInt(process.env.IMG2HTML_VARIANTS || "1", 10))
-    .option("-o, --output <dir>", "Output directory", process.env.IMG2HTML_OUTPUT || "./output")
+    .option("-o, --output <dir>", "Output directory")
     .option("-p, --prompt <text>", "Additional instructions for the agent")
     .option("--max-width <pixels>", "Maximum width to scale image to (maintains aspect ratio)", (val) => val ? parseInt(val, 10) : undefined)
     .option("--max-height <pixels>", "Maximum height to scale image to (maintains aspect ratio)", (val) => val ? parseInt(val, 10) : undefined)
@@ -105,14 +111,29 @@ async function main() {
         process.exit(1);
       }
 
-      const resolvedOutput = path.resolve(output || "./output");
+      let resolvedOutput: string;
+      let outputExplicit = false;
+
+      if (output) {
+        resolvedOutput = path.resolve(output);
+        outputExplicit = true;
+      } else if (process.env.IMG2HTML_OUTPUT) {
+        resolvedOutput = path.resolve(process.env.IMG2HTML_OUTPUT);
+        outputExplicit = true;
+      } else {
+        resolvedOutput = path.resolve(generateDefaultOutputDir());
+        if (fs.existsSync(resolvedOutput)) {
+          console.error(`Error: Output directory already exists: ${resolvedOutput}`);
+          process.exit(1);
+        }
+      }
 
       console.error("Configuration:");
       console.error(`  Image: ${imagePath}`);
       console.error(`  Stack: ${stack}`);
       console.error(`  Model: ${model}`);
       console.error(`  Variants: ${variants}`);
-      console.error(`  Output: ${resolvedOutput}`);
+      console.error(`  Output: ${resolvedOutput}${outputExplicit ? " (explicit)" : " (auto-generated)"}`);
       if (maxWidth) console.error(`  Max Width: ${maxWidth}`);
       if (maxHeight) console.error(`  Max Height: ${maxHeight}`);
       if (logFile) console.error(`  Log File: ${logFile}`);
