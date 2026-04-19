@@ -45,7 +45,7 @@ export function createCreateFileTool(fileState: { current: FileState | null }) {
 
 export function createEditFileTool(fileState: { current: FileState | null }) {
   return tool(
-    async ({ path: filePath, old_text, new_text, count }: { path: string; old_text: string; new_text: string; count?: number }) => {
+    async ({ path: filePath, old_text, new_text, count }: { path: string; old_text: string; new_text: string; count: number | null }) => {
       if (!fileState.current) {
         return JSON.stringify({
           success: false,
@@ -94,7 +94,7 @@ export function createEditFileTool(fileState: { current: FileState | null }) {
         path: z.string().describe("Path for the main HTML file."),
         old_text: z.string().describe("Exact text to replace. Must match the file contents."),
         new_text: z.string().describe("Replacement text."),
-        count: z.number().int().optional().describe("How many occurrences to replace. Defaults to 1."),
+        count: z.number().int().nullable().describe("How many occurrences to replace. Defaults to 1."),
       }),
     }
   );

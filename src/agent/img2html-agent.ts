@@ -201,12 +201,12 @@ export async function runAgent(options: {
           console.error(`\n[Tool: ${tc.name}]`);
 
           let toolResult: string;
-          const args = tc.args as { path?: string; content?: string; old_text?: string; new_text?: string; count?: number };
+          const args = tc.args as { path?: string; content?: string; old_text?: string; new_text?: string; count?: number | null };
 
           if (tc.name === "create_file" && args.path && args.content !== undefined) {
             toolResult = await createFileTool.invoke({ path: args.path, content: args.content });
           } else if (tc.name === "edit_file" && args.path && args.old_text && args.new_text !== undefined) {
-            toolResult = await editFileTool.invoke({ path: args.path, old_text: args.old_text, new_text: args.new_text, count: args.count });
+            toolResult = await editFileTool.invoke({ path: args.path, old_text: args.old_text, new_text: args.new_text, count: args.count ?? null });
           } else {
             toolResult = `Invalid tool arguments for ${tc.name}`;
           }
