@@ -1,14 +1,8 @@
-import { ChatOpenAI } from "@langchain/openai";
-import { ChatAnthropic } from "@langchain/anthropic";
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
-import { createCreateFileTool, createEditFileTool, type FileState } from "../tools/file-tools.js";
+import { initChatModel } from "langchain";
+import { createAgent, tool, HumanMessage, SystemMessage, AIMessage, BaseMessage, ToolMessage } from "langchain";
+import { z } from "zod";
 import { loadImageAsDataUrl, type ImageScalerOptions } from "../utils/image.js";
 import { ensureDir } from "../utils/output.js";
-import { SystemMessage, HumanMessage, AIMessage, BaseMessage, ToolMessage } from "@langchain/core/messages";
-import { type BaseChatModel } from "@langchain/core/language_models/chat_models";
-import { type StructuredTool } from "@langchain/core/tools";
-import * as path from "path";
-import * as fs from "fs";
 import {
   type TokenUsage,
   type TokenUsageAccumulator,
@@ -167,45 +161,40 @@ ${stackInstructions}
   return prompt;
 }
 
-async function initializeModel(modelString: string): Promise<BaseChatModel> {
-  const [provider, modelName] = modelString.split(":");
+async function initializeModel(modelString: string) {
+  const config: Record<string, unknown> = {
+    temperature: 0,
+  };
 
-  if (provider === "openai") {
-    return new ChatOpenAI({ model: modelName || "gpt-4o", temperature: 0 });
-  } else if (provider === "anthropic") {
-    return new ChatAnthropic({ model: modelName || "claude-sonnet-4-6" });
-  } else if (provider === "openrouter") {
-    return new ChatOpenAI({
-      model: modelName || "anthropic/claude-3.5-sonnet",
-      apiKey: process.env.OPENROUTER_API_KEY,
-      configuration: {
-        baseURL: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
-        defaultHeaders: {
-          "HTTP-Referer": process.env.OPENROUTER_REFERRER || "https://github.com/img2html",
-          "X-Title": process.env.OPENROUTER_TITLE || "img2html CLI",
-        },
+  if (modelString.startsWith("openrouter:")) {
+    const modelName = modelString.replace("openrouter:", "");
+    config.apiKey = process.env.OPENROUTER_API_KEY;
+    config.configuration = {
+      baseURL: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
+      defaultHeaders: {
+        "HTTP-Referer": process.env.OPENROUTER_REFERRER || "https://github.com/img2html",
+        "X-Title": process.env.OPENROUTER_TITLE || "img2html CLI",
       },
-      temperature: 0,
-    });
-  } else if (provider === "gemini") {
-    return new ChatGoogleGenerativeAI({
-      model: modelName || "gemini-2.0-flash",
-      apiKey: process.env.GOOGLE_API_KEY,
-      temperature: 0,
-    });
-  } else if (provider === "minimax") {
-    return new ChatOpenAI({
-      model: modelName || "minimax:latest",
-      apiKey: process.env.MINIMAX_API_KEY,
-      configuration: {
-        baseURL: process.env.MINIMAX_BASE_URL || "https://api.minimax.io/v1",
-      },
-      temperature: 0,
-    });
-  } else {
-    throw new Error(`Unsupported provider: ${provider}`);
+    };
+    return initChatModel(modelName, { ...config, modelProvider: "openai" });
+  } else if (modelString.startsWith("gemini:")) {
+    const modelName = modelString.replace("gemini:", "");
+    config.apiKey = process.env.GOOGLE_API_KEY;
+    return initChatModel(modelName, { ...config, modelProvider: "google-genai" });
+  } else if (modelString.startsWith("minimax:")) {
+    const modelName = modelString.replace("minimax:", "");
+    config.apiKey = process.env.MINIMAX_API_KEY;
+    config.configuration = {
+      baseURL: process.env.MINIMAX_BASE_URL || "https://api.minimax.io/v1",
+    };
+    return initChatModel(modelName, { ...config, modelProvider: "openai" });
   }
+
+  return initChatModel(modelString, config);
 }
+
+import * as path from "path";
+import * as fs from "fs";
 
 export async function runAgent(options: {
   imagePath: string;
@@ -224,17 +213,9 @@ export async function runAgent(options: {
   console.error(`Stack: ${stack} | Model: ${modelString}`);
   console.error(`${"=".repeat(60)}\n`);
 
-  const fileState: { current: FileState | null } = { current: null };
-  const createFileTool = createCreateFileTool(fileState, outputDir);
-  const editFileTool = createEditFileTool(fileState, outputDir);
-  const tools = [createFileTool, editFileTool];
-
-  let model: BaseChatModel;
-  let modelWithTools: any;
-
+  let model;
   try {
     model = await initializeModel(modelString);
-    modelWithTools = (model as any).bindTools(tools);
   } catch (error) {
     return {
       success: false,
@@ -256,98 +237,172 @@ export async function runAgent(options: {
     };
   }
 
-  const messages: BaseMessage[] = [
-    new SystemMessage(getSystemPrompt(stack)),
-  ];
+  const fileState: { current: { path: string; content: string } | null } = { current: null };
 
-  const userPromptContent: Array<{ type: "image_url"; image_url: { url: string; detail: string } } | { type: "text"; text: string }> = [
-    { type: "image_url", image_url: { url: imageDataUrl, detail: "high" } },
-    { type: "text", text: buildUserPrompt(stack, additionalPrompt) }
-  ];
+  const createFileTool = tool(
+    async ({ path: filePath, content }: { path: string; content: string }) => {
+      const resolvedPath = path.resolve(outputDir, filePath);
+      const resolvedOutputDir = path.resolve(outputDir);
+      const isUnderOutputDir = resolvedPath.startsWith(resolvedOutputDir + path.sep) || resolvedPath === resolvedOutputDir;
+      if (!isUnderOutputDir) {
+        throw new Error(`Security: Path "${filePath}" escapes output directory`);
+      }
 
-  messages.push(new HumanMessage({ content: userPromptContent }));
+      const dir = path.dirname(resolvedPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
 
+      fs.writeFileSync(resolvedPath, content, "utf-8");
+      fileState.current = { path: resolvedPath, content };
+
+      const preview = content.length > 200 ? content.slice(0, 200) + "..." : content;
+
+      return JSON.stringify({
+        success: true,
+        path: resolvedPath,
+        contentLength: content.length,
+        preview,
+      });
+    },
+    {
+      name: "create_file",
+      description: "Create the main HTML file for the app. Use exactly once to write the full HTML.",
+      schema: z.object({
+        path: z.string().describe("Path for the main HTML file. Use index.html if unsure."),
+        content: z.string().describe("Full HTML for the single-file app."),
+      }),
+    }
+  );
+
+  const editFileTool = tool(
+    async ({ path: filePath, old_text, new_text, count }: { path: string; old_text: string; new_text: string; count: number | null }) => {
+      if (!fileState.current) {
+        return JSON.stringify({
+          success: false,
+          error: "No file has been created yet. Use create_file first.",
+        });
+      }
+
+      const resolvedPath = path.resolve(outputDir, filePath);
+      const resolvedOutputDir = path.resolve(outputDir);
+      const isUnderOutputDir = resolvedPath.startsWith(resolvedOutputDir + path.sep) || resolvedPath === resolvedOutputDir;
+      if (!isUnderOutputDir) {
+        throw new Error(`Security: Path "${filePath}" escapes output directory`);
+      }
+
+      let content = fileState.current.content;
+
+      if (!content.includes(old_text)) {
+        return JSON.stringify({
+          success: false,
+          error: `Could not find old_text in the file. Make sure the exact string exists.`,
+          old_text_preview: old_text.slice(0, 100),
+        });
+      }
+
+      const replaceCount = count ?? 1;
+      if (replaceCount === -1) {
+        content = content.split(old_text).join(new_text);
+      } else {
+        let occurrences = 0;
+        content = content.split(old_text).reduce((acc, part, idx, arr) => {
+          if (idx < arr.length - 1 && occurrences < replaceCount) {
+            occurrences++;
+            return acc + part + new_text;
+          }
+          return acc + part;
+        }, "");
+      }
+
+      fs.writeFileSync(resolvedPath, content, "utf-8");
+      fileState.current = { path: resolvedPath, content };
+
+      return JSON.stringify({
+        success: true,
+        path: resolvedPath,
+        edit_summary: `Replaced ${count ?? 1} occurrence(s) of text (${old_text.length} chars) with (${new_text.length} chars)`,
+      });
+    },
+    {
+      name: "edit_file",
+      description: "Edit the main HTML file using exact string replacements. Do not regenerate the entire file.",
+      schema: z.object({
+        path: z.string().describe("Path for the main HTML file."),
+        old_text: z.string().describe("Exact text to replace. Must match the file contents."),
+        new_text: z.string().describe("Replacement text."),
+        count: z.number().int().nullable().describe("How many occurrences to replace. Defaults to 1."),
+      }),
+    }
+  );
+
+  const agent = createAgent({
+    model,
+    tools: [createFileTool, editFileTool],
+    systemPrompt: getSystemPrompt(stack),
+  });
+
+  const userMessage = new HumanMessage({
+    contentBlocks: [
+      { type: "image", url: imageDataUrl },
+      { type: "text", text: buildUserPrompt(stack, additionalPrompt) },
+    ],
+  });
+
+  const tokenAccumulator = createTokenAccumulator();
   let iterations = 0;
   let apiCalls = 0;
-  const tokenAccumulator = createTokenAccumulator();
 
   try {
-    while (iterations < MAX_ITERATIONS) {
-      const response = await modelWithTools!.invoke(messages);
-      apiCalls++;
+    let isFirstChunk = true;
+    const fullContent: string[] = [];
 
-      const responseMsg = response as AIMessage;
-      messages.push(responseMsg);
+    const streamResult = await agent.stream({
+      messages: [userMessage],
+    });
 
-      const tokenUsage = extractTokenUsage(responseMsg);
-      addIterationTokens(tokenAccumulator, iterations + 1, tokenUsage.promptTokens, tokenUsage.completionTokens, 1);
+    for await (const chunk of streamResult) {
+      const chunkStr = typeof chunk === "string" ? chunk : JSON.stringify(chunk);
+      fullContent.push(chunkStr);
 
-      if (typeof responseMsg.content === "string" && responseMsg.content.trim()) {
-        process.stdout.write(responseMsg.content);
+      if (isFirstChunk) {
+        isFirstChunk = false;
       }
 
-      if (responseMsg.tool_calls && responseMsg.tool_calls.length > 0) {
-        for (const tc of responseMsg.tool_calls) {
-          iterations++;
-          console.error(`\n[Tool: ${tc.name}]`);
-
-          let toolResult: string;
-          const args = tc.args as { path?: string; content?: string; old_text?: string; new_text?: string; count?: number | null };
-
-          if (tc.name === "create_file" && args.path && args.content !== undefined) {
-            toolResult = await createFileTool.invoke({ path: args.path, content: args.content });
-          } else if (tc.name === "edit_file" && args.path && args.old_text && args.new_text !== undefined) {
-            toolResult = await editFileTool.invoke({ path: args.path, old_text: args.old_text, new_text: args.new_text, count: args.count ?? null });
-          } else {
-            toolResult = `Invalid tool arguments for ${tc.name}`;
-          }
-
-          const toolMsg = new ToolMessage({
-            content: toolResult,
-            tool_call_id: tc.id || `call_${Date.now()}`,
-            name: tc.name,
-          });
-          messages.push(toolMsg);
-        }
-      } else {
-        if (fileState.current) {
-          const outPath = fileState.current.path;
-
-          if (logFile) {
-            writeLogFile(logFile, messages);
-          }
-
-          console.error(`\n\n${"=".repeat(60)}`);
-          console.error(`Output written to: ${outPath}`);
-          console.error(`${"=".repeat(60)}\n`);
-
-          return {
-            success: true,
-            outputPath: outPath,
-            content: fileState.current.content,
-            iterations,
-            tokenUsage: tokenAccumulator,
-          };
-        }
-        break;
+      if (chunk && typeof chunk === "object" && "tool_calls" in chunk) {
+        iterations++;
+        console.error(`\n[Tool calls detected in stream]`);
       }
+
+      process.stdout.write(chunkStr);
     }
 
-    if (logFile) {
-      writeLogFile(logFile, messages);
+    console.error("\n\nStream completed");
+    console.error(`Iterations: ${iterations}, API calls: ${apiCalls}`);
+
+    if (fileState.current) {
+      const outPath = fileState.current.path;
+
+      console.error(`\n${"=".repeat(60)}`);
+      console.error(`Output written to: ${outPath}`);
+      console.error(`${"=".repeat(60)}\n`);
+
+      return {
+        success: true,
+        outputPath: outPath,
+        content: fileState.current.content,
+        iterations,
+        tokenUsage: tokenAccumulator,
+      };
     }
 
     return {
       success: false,
       iterations,
       tokenUsage: tokenAccumulator,
-      error: "Max iterations reached without producing final output",
+      error: "Agent completed without producing output file",
     };
   } catch (error) {
-    if (logFile) {
-      writeLogFile(logFile, messages);
-    }
-
     return {
       success: false,
       iterations,
