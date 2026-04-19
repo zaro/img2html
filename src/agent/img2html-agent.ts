@@ -1,10 +1,10 @@
 import { initChatModel } from "langchain";
-import { createAgent, tool, HumanMessage, SystemMessage, AIMessage, BaseMessage, ToolMessage } from "langchain";
+import { createAgent, tool, HumanMessage, BaseMessage, ToolMessage } from "langchain";
+import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
+import type { LLMResult } from "@langchain/core/outputs";
 import { z } from "zod";
 import { loadImageAsDataUrl, type ImageScalerOptions } from "../utils/image.js";
-import { ensureDir } from "../utils/output.js";
 import {
-  type TokenUsage,
   type TokenUsageAccumulator,
   createTokenAccumulator,
   addIterationTokens,
@@ -21,6 +21,29 @@ export interface AgentResult {
   iterations: number;
   tokenUsage: TokenUsageAccumulator | null;
   error?: string;
+}
+
+class TokenUsageCallbackHandler extends BaseCallbackHandler {
+  name = "token_usage_handler";
+
+  promptTokens = 0;
+  completionTokens = 0;
+  totalTokens = 0;
+
+  async handleLLMEnd(output: LLMResult) {
+    const tokenUsage = output.llmOutput?.tokenUsage;
+    if (tokenUsage) {
+      this.promptTokens = tokenUsage.promptTokens ?? 0;
+      this.completionTokens = tokenUsage.completionTokens ?? 0;
+      this.totalTokens = tokenUsage.totalTokens ?? 0;
+    }
+  }
+
+  reset() {
+    this.promptTokens = 0;
+    this.completionTokens = 0;
+    this.totalTokens = 0;
+  }
 }
 
 function serializeMessages(messages: BaseMessage[]): object[] {
@@ -76,26 +99,16 @@ function writeLogFile(logFile: string, messages: BaseMessage[]): void {
   }
 }
 
-function extractTokenUsage(response: AIMessage): { promptTokens: number; completionTokens: number } {
-  const usageMetadata = (response as any).usage_metadata;
-  const responseMetadata = (response as any).response_metadata;
-
-  if (usageMetadata) {
-    return {
-      promptTokens: usageMetadata.input_tokens || 0,
-      completionTokens: usageMetadata.output_tokens || 0,
-    };
+function extractTextContent(chunk: any): string | null {
+  if (typeof chunk.content === "string") return chunk.content;
+  if (Array.isArray(chunk.content)) {
+    return chunk.content
+      .filter((c: any) => c.type === "text" && typeof c.text === "string")
+      .map((c: any) => c.text)
+      .join("");
   }
-
-  if (responseMetadata?.token_usage) {
-    const usage = responseMetadata.token_usage;
-    return {
-      promptTokens: usage.prompt_tokens || usage.input_tokens || 0,
-      completionTokens: usage.completion_tokens || usage.output_tokens || 0,
-    };
-  }
-
-  return { promptTokens: 0, completionTokens: 0 };
+  if (typeof chunk.text === "string") return chunk.text;
+  return null;
 }
 
 function getSystemPrompt(stack: Stack): string {
@@ -342,6 +355,9 @@ export async function runAgent(options: {
     systemPrompt: getSystemPrompt(stack),
   });
 
+  const tokenHandler = new TokenUsageCallbackHandler();
+  let toolCallCount = 0;
+
   const userMessage = new HumanMessage({
     contentBlocks: [
       { type: "image", url: imageDataUrl },
@@ -350,35 +366,37 @@ export async function runAgent(options: {
   });
 
   const tokenAccumulator = createTokenAccumulator();
-  let iterations = 0;
-  let apiCalls = 0;
 
   try {
-    let isFirstChunk = true;
-    const fullContent: string[] = [];
-
-    const streamResult = await agent.stream({
-      messages: [userMessage],
-    });
+    const streamResult = await agent.stream(
+      { messages: [userMessage] },
+      { callbacks: [tokenHandler] }
+    );
 
     for await (const chunk of streamResult) {
-      const chunkStr = typeof chunk === "string" ? chunk : JSON.stringify(chunk);
-      fullContent.push(chunkStr);
+      if (typeof chunk === "string") {
+        process.stdout.write(chunk);
+      } else if (chunk) {
+        const chunkData = chunk as any;
+        const text = extractTextContent(chunkData);
+        if (text) {
+          process.stdout.write(text);
+        }
 
-      if (isFirstChunk) {
-        isFirstChunk = false;
+        if (chunkData.tool_calls && chunkData.tool_calls.length > 0) {
+          toolCallCount++;
+          console.error(`[Tool calls detected]`);
+        }
       }
-
-      if (chunk && typeof chunk === "object" && "tool_calls" in chunk) {
-        iterations++;
-        console.error(`\n[Tool calls detected in stream]`);
-      }
-
-      process.stdout.write(chunkStr);
     }
 
+    const { promptTokens, completionTokens, totalTokens } = tokenHandler;
     console.error("\n\nStream completed");
-    console.error(`Iterations: ${iterations}, API calls: ${apiCalls}`);
+    console.error(`Total tool calls: ${toolCallCount}`);
+    console.error(`Total tokens - Prompt: ${promptTokens}, Completion: ${completionTokens}, Combined: ${totalTokens}`);
+
+    addIterationTokens(tokenAccumulator, 1, promptTokens, completionTokens, 1);
+    tokenAccumulator.totals.apiCalls = 1;
 
     if (fileState.current) {
       const outPath = fileState.current.path;
@@ -391,21 +409,21 @@ export async function runAgent(options: {
         success: true,
         outputPath: outPath,
         content: fileState.current.content,
-        iterations,
+        iterations: toolCallCount,
         tokenUsage: tokenAccumulator,
       };
     }
 
     return {
       success: false,
-      iterations,
+      iterations: toolCallCount,
       tokenUsage: tokenAccumulator,
       error: "Agent completed without producing output file",
     };
   } catch (error) {
     return {
       success: false,
-      iterations,
+      iterations: toolCallCount,
       tokenUsage: tokenAccumulator,
       error: error instanceof Error ? error.message : String(error),
     };

@@ -105,7 +105,11 @@ export async function getPricing(
       return { pricing: null, source: "unknown" };
     }
     const cache = await fetchOpenRouterPricing(apiKey);
-    const pricing = cache[modelKey] || null;
+    const modelName = modelKey.replace(/^openrouter:/, "");
+    const pricing = cache[modelName] || null;
+    if (!pricing && Object.keys(cache).length > 0) {
+      console.error(`Warning: OpenRouter pricing fetched (${Object.keys(cache).length} models), but "${modelName}" not found in the list.`);
+    }
     return { pricing, source: pricing ? "openrouter-api" : "unknown" };
   }
 
