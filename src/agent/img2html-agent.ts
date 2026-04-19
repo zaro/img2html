@@ -26,23 +26,25 @@ export interface AgentResult {
 class TokenUsageCallbackHandler extends BaseCallbackHandler {
   name = "token_usage_handler";
 
-  promptTokens = 0;
-  completionTokens = 0;
-  totalTokens = 0;
+  calls: Array<{ promptTokens: number; completionTokens: number; totalTokens: number }> = [];
 
   async handleLLMEnd(output: LLMResult) {
-    const tokenUsage = output.llmOutput?.tokenUsage;
-    if (tokenUsage) {
-      this.promptTokens = tokenUsage.promptTokens ?? 0;
-      this.completionTokens = tokenUsage.completionTokens ?? 0;
-      this.totalTokens = tokenUsage.totalTokens ?? 0;
+    if (!output.llmOutput) {
+      return;
     }
+    const tokenUsage = output.llmOutput.tokenUsage;
+    if (!tokenUsage) {
+      return;
+    }
+    const promptTokens = tokenUsage.promptTokens ?? 0;
+    const completionTokens = tokenUsage.completionTokens ?? 0;
+    const totalTokens = tokenUsage.totalTokens ?? (promptTokens + completionTokens);
+    this.calls.push({ promptTokens, completionTokens, totalTokens });
+    console.error(`\n[API Call #${this.calls.length}] Prompt: ${promptTokens}, Completion: ${completionTokens}, Total: ${totalTokens}`);
   }
 
   reset() {
-    this.promptTokens = 0;
-    this.completionTokens = 0;
-    this.totalTokens = 0;
+    this.calls = [];
   }
 }
 
@@ -368,35 +370,60 @@ export async function runAgent(options: {
   const tokenAccumulator = createTokenAccumulator();
 
   try {
-    const streamResult = await agent.stream(
-      { messages: [userMessage] },
-      { callbacks: [tokenHandler] }
-    );
-
-    for await (const chunk of streamResult) {
-      if (typeof chunk === "string") {
-        process.stdout.write(chunk);
-      } else if (chunk) {
-        const chunkData = chunk as any;
-        const text = extractTextContent(chunkData);
-        if (text) {
-          process.stdout.write(text);
-        }
-
-        if (chunkData.tool_calls && chunkData.tool_calls.length > 0) {
-          toolCallCount++;
-          console.error(`[Tool calls detected]`);
-        }
-      }
+    let streamResult;
+    try {
+      streamResult = await agent.stream(
+        { messages: [userMessage] },
+        { callbacks: [tokenHandler] }
+      );
+    } catch (streamError) {
+      return {
+        success: false,
+        iterations: toolCallCount,
+        tokenUsage: tokenAccumulator,
+        error: `Stream error: ${streamError instanceof Error ? streamError.message : String(streamError)}`,
+      };
     }
 
-    const { promptTokens, completionTokens, totalTokens } = tokenHandler;
-    console.error("\n\nStream completed");
-    console.error(`Total tool calls: ${toolCallCount}`);
-    console.error(`Total tokens - Prompt: ${promptTokens}, Completion: ${completionTokens}, Combined: ${totalTokens}`);
+    try {
+      for await (const chunk of streamResult) {
+        if (typeof chunk === "string") {
+          process.stdout.write(chunk);
+        } else if (chunk) {
+          const chunkData = chunk as any;
+          const text = extractTextContent(chunkData);
+          if (text) {
+            process.stdout.write(text);
+          }
 
-    addIterationTokens(tokenAccumulator, 1, promptTokens, completionTokens, 1);
-    tokenAccumulator.totals.apiCalls = 1;
+          if (chunkData.tool_calls && chunkData.tool_calls.length > 0) {
+            toolCallCount++;
+            console.error(`[Tool calls detected]`);
+          }
+        }
+      }
+    } catch (iterationError) {
+      return {
+        success: false,
+        iterations: toolCallCount,
+        tokenUsage: tokenAccumulator,
+        error: `Iteration error: ${iterationError instanceof Error ? iterationError.message : String(iterationError)}`,
+      };
+    }
+
+    const totalPromptTokens = tokenHandler.calls.reduce((sum, c) => sum + c.promptTokens, 0);
+    const totalCompletionTokens = tokenHandler.calls.reduce((sum, c) => sum + c.completionTokens, 0);
+    const totalTokensAll = tokenHandler.calls.reduce((sum, c) => sum + c.totalTokens, 0);
+    console.error("\n\nStream completed");
+    console.error(`Total API calls: ${tokenHandler.calls.length}`);
+    console.error(`Total tool calls: ${toolCallCount}`);
+    console.error(`Total tokens - Prompt: ${totalPromptTokens}, Completion: ${totalCompletionTokens}, Combined: ${totalTokensAll}`);
+
+    for (let i = 0; i < tokenHandler.calls.length; i++) {
+      const call = tokenHandler.calls[i];
+      addIterationTokens(tokenAccumulator, i + 1, call.promptTokens, call.completionTokens, 1);
+    }
+    tokenAccumulator.totals.apiCalls = tokenHandler.calls.length;
 
     if (fileState.current) {
       const outPath = fileState.current.path;
@@ -421,11 +448,17 @@ export async function runAgent(options: {
       error: "Agent completed without producing output file",
     };
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    console.error(`Agent error: ${errorMessage}`);
+    if (errorStack) {
+      console.error(`Stack: ${errorStack}`);
+    }
     return {
       success: false,
       iterations: toolCallCount,
       tokenUsage: tokenAccumulator,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage,
     };
   }
 }
