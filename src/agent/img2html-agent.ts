@@ -2,7 +2,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { createCreateFileTool, createEditFileTool, type FileState } from "../tools/file-tools.js";
-import { loadImageAsDataUrl } from "../utils/image.js";
+import { loadImageAsDataUrl, type ImageScalerOptions } from "../utils/image.js";
 import { ensureDir } from "../utils/output.js";
 import { SystemMessage, HumanMessage, AIMessage, BaseMessage, ToolMessage } from "@langchain/core/messages";
 import { type BaseChatModel } from "@langchain/core/language_models/chat_models";
@@ -132,8 +132,9 @@ export async function runAgent(options: {
   outputDir: string;
   additionalPrompt?: string;
   variantIndex?: number;
+  imageScalerOptions?: ImageScalerOptions;
 }): Promise<AgentResult> {
-  const { imagePath, stack, modelString, outputDir, additionalPrompt, variantIndex } = options;
+  const { imagePath, stack, modelString, outputDir, additionalPrompt, variantIndex, imageScalerOptions } = options;
 
   console.error(`\n${"=".repeat(60)}`);
   console.error(`Generating variant ${variantIndex || 1}`);
@@ -161,7 +162,7 @@ export async function runAgent(options: {
 
   let imageDataUrl: string;
   try {
-    imageDataUrl = await loadImageAsDataUrl(imagePath);
+    imageDataUrl = await loadImageAsDataUrl(imagePath, imageScalerOptions);
   } catch (error) {
     return {
       success: false,

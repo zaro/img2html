@@ -11,6 +11,8 @@ interface CliOptions {
   variants: number;
   output: string;
   prompt?: string;
+  maxWidth?: number;
+  maxHeight?: number;
 }
 
 async function main() {
@@ -26,8 +28,10 @@ async function main() {
     .option("-v, --variants <number>", "Number of variants to generate", (val) => parseInt(val, 10), parseInt(process.env.IMG2HTML_VARIANTS || "1", 10))
     .option("-o, --output <dir>", "Output directory", process.env.IMG2HTML_OUTPUT || "./output")
     .option("-p, --prompt <text>", "Additional instructions for the agent")
+    .option("--max-width <pixels>", "Maximum width to scale image to (maintains aspect ratio)", (val) => val ? parseInt(val, 10) : undefined)
+    .option("--max-height <pixels>", "Maximum height to scale image to (maintains aspect ratio)", (val) => val ? parseInt(val, 10) : undefined)
     .action(async (imagePath: string, options: Partial<CliOptions>) => {
-      const { stack, model, variants, output, prompt } = options;
+      const { stack, model, variants, output, prompt, maxWidth, maxHeight } = options;
 
       if (!["html_css", "tailwind"].includes(stack || "")) {
         console.error('Error: Stack must be "html_css" or "tailwind"');
@@ -39,6 +43,11 @@ async function main() {
         process.exit(1);
       }
 
+      if ((maxWidth && maxWidth < 1) || (maxHeight && maxHeight < 1)) {
+        console.error("Error: Max width and height must be positive integers");
+        process.exit(1);
+      }
+
       const resolvedOutput = path.resolve(output || "./output");
 
       console.error("Configuration:");
@@ -47,6 +56,8 @@ async function main() {
       console.error(`  Model: ${model}`);
       console.error(`  Variants: ${variants}`);
       console.error(`  Output: ${resolvedOutput}`);
+      if (maxWidth) console.error(`  Max Width: ${maxWidth}`);
+      if (maxHeight) console.error(`  Max Height: ${maxHeight}`);
       if (prompt) console.error(`  Additional prompt: ${prompt}`);
       console.error("");
 
@@ -61,6 +72,7 @@ async function main() {
           outputDir: resolvedOutput,
           additionalPrompt: prompt,
           variantIndex: variants && variants > 1 ? i : undefined,
+          imageScalerOptions: (maxWidth || maxHeight) ? { maxWidth, maxHeight } : undefined,
         });
 
         if (result.success) {
