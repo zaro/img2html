@@ -5,6 +5,8 @@ import { runAgent, type Stack } from "./agent/img2html-agent.js";
 import * as path from "path";
 import * as fs from "fs";
 import { fileURLToPath } from "url";
+import { getPricing, formatCost, formatTokenCount } from "./utils/pricing.js";
+import { calculateCost } from "./types/token-usage.js";
 
 interface CliOptions {
   stack: Stack;
@@ -15,6 +17,7 @@ interface CliOptions {
   maxWidth?: number;
   maxHeight?: number;
   logFile?: string;
+  pricingFile?: string;
 }
 
 interface GenParams {
@@ -35,6 +38,59 @@ function writeGenParams(outputDir: string, params: GenParams): void {
     console.error(`Generation params written to: ${genParamsPath}`);
   } catch (error) {
     console.error(`Warning: Failed to write gen-params.json: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function writeTokensJson(
+  outputDir: string,
+  tokenUsage: { totals: { promptTokens: number; completionTokens: number; totalTokens: number; apiCalls: number }; iterations: Array<{ iteration: number; promptTokens: number; completionTokens: number; totalTokens: number; apiCalls: number }> },
+  pricingInfo: { pricing: { promptPer1M: number | null; completionPer1M: number | null } | null; source: string }
+): void {
+  try {
+    const tokensPath = path.join(outputDir, "tokens.json");
+    const tokensJson = {
+      timestamp: new Date().toISOString(),
+      model: "",
+      pricing: {
+        promptPer1M: pricingInfo.pricing?.promptPer1M || null,
+        completionPer1M: pricingInfo.pricing?.completionPer1M || null,
+        currency: "USD",
+        source: pricingInfo.source,
+      },
+      totals: tokenUsage.totals,
+      iterations: tokenUsage.iterations,
+    };
+    fs.writeFileSync(tokensPath, JSON.stringify(tokensJson, null, 2), "utf-8");
+    console.error(`Tokens file written to: ${tokensPath}`);
+  } catch (error) {
+    console.error(`Warning: Failed to write tokens.json: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function printTokenSummary(
+  tokenUsage: { totals: { promptTokens: number; completionTokens: number; totalTokens: number; apiCalls: number }; iterations: Array<{ iteration: number; promptTokens: number; completionTokens: number; totalTokens: number; apiCalls: number }> },
+  pricingInfo: { pricing: { promptPer1M: number | null; completionPer1M: number | null } | null; source: string },
+  modelKey: string
+): void {
+  const { totals } = tokenUsage;
+
+  console.error("\nTokens used:");
+  console.error(`  API calls:        ${totals.apiCalls}`);
+  console.error(`  Prompt tokens:     ${formatTokenCount(totals.promptTokens)}`);
+  console.error(`  Completion tokens: ${formatTokenCount(totals.completionTokens)}`);
+  console.error(`  Total tokens:      ${formatTokenCount(totals.totalTokens)}`);
+
+  if (pricingInfo.pricing) {
+    const cost = calculateCost(
+      { iterations: tokenUsage.iterations, totals },
+      pricingInfo.pricing.promptPer1M,
+      pricingInfo.pricing.completionPer1M
+    );
+    console.error(`  Estimated cost:    ${formatCost(cost)}`);
+    console.error(`\n  (Based on: ${modelKey} @ $${pricingInfo.pricing.promptPer1M}/1M prompt, $${pricingInfo.pricing.completionPer1M}/1M completion)`);
+  } else {
+    console.error(`  Estimated cost:    ${formatCost(null)}`);
+    console.error(`\n  (Pricing not available for ${modelKey})`);
   }
 }
 
@@ -93,8 +149,9 @@ async function main() {
     .option("--max-width <pixels>", "Maximum width to scale image to (maintains aspect ratio)", (val) => val ? parseInt(val, 10) : undefined)
     .option("--max-height <pixels>", "Maximum height to scale image to (maintains aspect ratio)", (val) => val ? parseInt(val, 10) : undefined)
     .option("--log-file <path>", "File path to write raw agent conversation to")
+    .option("--pricing-file <path>", "Path to JSON file with provider pricing for non-OpenRouter models")
     .action(async (imagePath: string, options: Partial<CliOptions>) => {
-      const { stack, model, variants, output, prompt, maxWidth, maxHeight, logFile } = options;
+      const { stack, model, variants, output, prompt, maxWidth, maxHeight, logFile, pricingFile } = options;
 
       if (!["html_css", "tailwind"].includes(stack || "")) {
         console.error('Error: Stack must be "html_css" or "tailwind"');
@@ -169,7 +226,8 @@ async function main() {
           successCount++;
           console.error(`\nVariant ${i} completed successfully in ${result.iterations} iterations`);
 
-          const [provider, modelName] = (model || "openai:gpt-4o").split(":");
+          const modelKey = model || "openai:gpt-4o";
+          const [provider, modelName] = modelKey.split(":");
           const variantOutputDir = variants && variants > 1
             ? path.join(resolvedOutput, `variant-${i}`)
             : resolvedOutput;
@@ -186,6 +244,12 @@ async function main() {
             additionalPrompt: prompt,
             timestamp: new Date().toISOString(),
           });
+
+          if (result.tokenUsage) {
+            const pricingInfo = await getPricing(modelKey, pricingFile);
+            writeTokensJson(variantOutputDir, result.tokenUsage, pricingInfo);
+            printTokenSummary(result.tokenUsage, pricingInfo, modelKey);
+          }
         } else {
           failureCount++;
           console.error(`\nVariant ${i} failed: ${result.error}`);

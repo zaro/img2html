@@ -9,6 +9,12 @@ import { type BaseChatModel } from "@langchain/core/language_models/chat_models"
 import { type StructuredTool } from "@langchain/core/tools";
 import * as path from "path";
 import * as fs from "fs";
+import {
+  type TokenUsage,
+  type TokenUsageAccumulator,
+  createTokenAccumulator,
+  addIterationTokens,
+} from "../types/token-usage.js";
 
 const MAX_ITERATIONS = 20;
 
@@ -19,6 +25,7 @@ export interface AgentResult {
   outputPath?: string;
   content?: string;
   iterations: number;
+  tokenUsage: TokenUsageAccumulator | null;
   error?: string;
 }
 
@@ -73,6 +80,28 @@ function writeLogFile(logFile: string, messages: BaseMessage[]): void {
   } catch (error) {
     console.error(`Warning: Failed to write log file: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+function extractTokenUsage(response: AIMessage): { promptTokens: number; completionTokens: number } {
+  const usageMetadata = (response as any).usage_metadata;
+  const responseMetadata = (response as any).response_metadata;
+
+  if (usageMetadata) {
+    return {
+      promptTokens: usageMetadata.input_tokens || 0,
+      completionTokens: usageMetadata.output_tokens || 0,
+    };
+  }
+
+  if (responseMetadata?.token_usage) {
+    const usage = responseMetadata.token_usage;
+    return {
+      promptTokens: usage.prompt_tokens || usage.input_tokens || 0,
+      completionTokens: usage.completion_tokens || usage.output_tokens || 0,
+    };
+  }
+
+  return { promptTokens: 0, completionTokens: 0 };
 }
 
 function getSystemPrompt(stack: Stack): string {
@@ -210,6 +239,7 @@ export async function runAgent(options: {
     return {
       success: false,
       iterations: 0,
+      tokenUsage: null,
       error: `Failed to initialize model: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
@@ -221,6 +251,7 @@ export async function runAgent(options: {
     return {
       success: false,
       iterations: 0,
+      tokenUsage: null,
       error: `Failed to load image: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
@@ -237,13 +268,19 @@ export async function runAgent(options: {
   messages.push(new HumanMessage({ content: userPromptContent }));
 
   let iterations = 0;
+  let apiCalls = 0;
+  const tokenAccumulator = createTokenAccumulator();
 
   try {
     while (iterations < MAX_ITERATIONS) {
       const response = await modelWithTools!.invoke(messages);
+      apiCalls++;
 
       const responseMsg = response as AIMessage;
       messages.push(responseMsg);
+
+      const tokenUsage = extractTokenUsage(responseMsg);
+      addIterationTokens(tokenAccumulator, iterations + 1, tokenUsage.promptTokens, tokenUsage.completionTokens, 1);
 
       if (typeof responseMsg.content === "string" && responseMsg.content.trim()) {
         process.stdout.write(responseMsg.content);
@@ -289,6 +326,7 @@ export async function runAgent(options: {
             outputPath: outPath,
             content: fileState.current.content,
             iterations,
+            tokenUsage: tokenAccumulator,
           };
         }
         break;
@@ -302,6 +340,7 @@ export async function runAgent(options: {
     return {
       success: false,
       iterations,
+      tokenUsage: tokenAccumulator,
       error: "Max iterations reached without producing final output",
     };
   } catch (error) {
@@ -312,6 +351,7 @@ export async function runAgent(options: {
     return {
       success: false,
       iterations,
+      tokenUsage: tokenAccumulator,
       error: error instanceof Error ? error.message : String(error),
     };
   }
