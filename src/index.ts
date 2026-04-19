@@ -29,6 +29,8 @@ interface GenParams {
   maxHeight?: number;
   additionalPrompt?: string;
   timestamp: string;
+  success: boolean;
+  error?: string;
 }
 
 function writeGenParams(outputDir: string, params: GenParams): void {
@@ -205,6 +207,10 @@ async function main() {
           ? path.join(resolvedOutput, `variant-${i}`)
           : resolvedOutput;
 
+        if (!fs.existsSync(variantOutputDir)) {
+          fs.mkdirSync(variantOutputDir, { recursive: true });
+        }
+
         let variantLogFile: string | undefined;
         if (logFile !== undefined) {
           const baseName = typeof logFile === "string" ? logFile : "conversation";
@@ -227,31 +233,33 @@ async function main() {
           logFile: variantLogFile,
         });
 
+        await copyImageToOutput(imagePath, variantOutputDir);
+
+        const modelKey = model || "openai:gpt-4o";
+        const [provider, modelName] = modelKey.split(":");
+
+        writeGenParams(variantOutputDir, {
+          imagePath,
+          provider,
+          model: modelName,
+          stack: (stack || "tailwind") as Stack,
+          maxWidth,
+          maxHeight,
+          additionalPrompt: prompt,
+          timestamp: new Date().toISOString(),
+          success: result.success,
+          error: result.error || undefined,
+        });
+
+        if (result.tokenUsage) {
+          const pricingInfo = await getPricing(modelKey, pricingFile);
+          writeTokensJson(variantOutputDir, result.tokenUsage, pricingInfo);
+          printTokenSummary(result.tokenUsage, pricingInfo, modelKey);
+        }
+
         if (result.success) {
           successCount++;
           console.error(`\nVariant ${i} completed successfully in ${result.iterations} iterations`);
-
-          const modelKey = model || "openai:gpt-4o";
-          const [provider, modelName] = modelKey.split(":");
-
-          await copyImageToOutput(imagePath, variantOutputDir);
-
-          writeGenParams(variantOutputDir, {
-            imagePath,
-            provider,
-            model: modelName,
-            stack: (stack || "tailwind") as Stack,
-            maxWidth,
-            maxHeight,
-            additionalPrompt: prompt,
-            timestamp: new Date().toISOString(),
-          });
-
-          if (result.tokenUsage) {
-            const pricingInfo = await getPricing(modelKey, pricingFile);
-            writeTokensJson(variantOutputDir, result.tokenUsage, pricingInfo);
-            printTokenSummary(result.tokenUsage, pricingInfo, modelKey);
-          }
         } else {
           failureCount++;
           console.error(`\nVariant ${i} failed: ${result.error}`);
