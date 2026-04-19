@@ -148,7 +148,7 @@ async function main() {
     .option("-p, --prompt <text>", "Additional instructions for the agent")
     .option("--max-width <pixels>", "Maximum width to scale image to (maintains aspect ratio)", (val) => val ? parseInt(val, 10) : undefined)
     .option("--max-height <pixels>", "Maximum height to scale image to (maintains aspect ratio)", (val) => val ? parseInt(val, 10) : undefined)
-    .option("--log-file <path>", "File path to write raw agent conversation to")
+    .option("--log-file [filename]", "Filename for agent conversation log (written to output dir)")
     .option("--pricing-file <path>", "Path to JSON file with provider pricing for non-OpenRouter models")
     .action(async (imagePath: string, options: Partial<CliOptions>) => {
       const { stack, model, variants, output, prompt, maxWidth, maxHeight, logFile, pricingFile } = options;
@@ -193,7 +193,7 @@ async function main() {
       console.error(`  Output: ${resolvedOutput}${outputExplicit ? " (explicit)" : " (auto-generated)"}`);
       if (maxWidth) console.error(`  Max Width: ${maxWidth}`);
       if (maxHeight) console.error(`  Max Height: ${maxHeight}`);
-      if (logFile) console.error(`  Log File: ${logFile}`);
+      if (logFile !== undefined) console.error(`  Log File: ${logFile || "conversation.json"}`);
       if (prompt) console.error(`  Additional prompt: ${prompt}`);
       console.error("");
 
@@ -201,13 +201,18 @@ async function main() {
       let failureCount = 0;
 
       for (let i = 1; i <= (variants || 1); i++) {
+        const variantOutputDir = variants && variants > 1
+          ? path.join(resolvedOutput, `variant-${i}`)
+          : resolvedOutput;
+
         let variantLogFile: string | undefined;
-        if (logFile) {
+        if (logFile !== undefined) {
+          const baseName = typeof logFile === "string" ? logFile : "conversation";
+          const cleanName = baseName.replace(/\.json$/, "");
           if (variants && variants > 1) {
-            const baseName = logFile.replace(/\.json$/, "");
-            variantLogFile = `${baseName}-${i}.json`;
+            variantLogFile = path.join(variantOutputDir, `${cleanName}-${i}.json`);
           } else {
-            variantLogFile = logFile.endsWith(".json") ? logFile : `${logFile}.json`;
+            variantLogFile = path.join(variantOutputDir, `${cleanName}.json`);
           }
         }
 
@@ -215,9 +220,9 @@ async function main() {
           imagePath,
           stack: (stack || "tailwind") as Stack,
           modelString: model || "openai:gpt-4o",
-          outputDir: resolvedOutput,
+          outputDir: variantOutputDir,
           additionalPrompt: prompt,
-          variantIndex: variants && variants > 1 ? i : undefined,
+          variantIndex: undefined,
           imageScalerOptions: (maxWidth || maxHeight) ? { maxWidth, maxHeight } : undefined,
           logFile: variantLogFile,
         });
@@ -228,9 +233,6 @@ async function main() {
 
           const modelKey = model || "openai:gpt-4o";
           const [provider, modelName] = modelKey.split(":");
-          const variantOutputDir = variants && variants > 1
-            ? path.join(resolvedOutput, `variant-${i}`)
-            : resolvedOutput;
 
           await copyImageToOutput(imagePath, variantOutputDir);
 
