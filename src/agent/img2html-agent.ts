@@ -309,33 +309,38 @@ export async function runAgent(
 
   const fileState: { current: { path: string; content: string } | null } = { current: null };
 
+function normalizeVfsPath(filePath: string): string {
+  return filePath.startsWith('/') ? filePath : `/${filePath}`;
+}
+
 const createFileTool = tool(
     async ({ path: filePath, content }: { path: string; content: string }) => {
-      logger.debug?.(`[createFile] path="${filePath}" contentLength=${content.length}`);
+      const normalizedPath = normalizeVfsPath(filePath);
+      logger.debug?.(`[createFile] path="${normalizedPath}" contentLength=${content.length}`);
 
-      const isUnderOutputDir = vfs.shouldHandle(filePath);
+      const isUnderOutputDir = vfs.shouldHandle(normalizedPath);
       if (!isUnderOutputDir) {
-        const error = `Security: Path "${filePath}" escapes output directory`;
+        const error = `Security: Path "${normalizedPath}" escapes output directory`;
         logger.debug?.(`[createFile] ${error}`);
         throw new Error(error);
       }
 
-      const dir = filePath.split('/').slice(0, -1).join('/') || '/';
+      const dir = normalizedPath.split('/').slice(0, -1).join('/') || '/';
       if (!vfs.existsSync(dir)) {
         logger.debug?.(`[createFile] creating directory "${dir}"`);
         vfs.mkdirSync(dir, { recursive: true });
       }
 
-      logger.debug?.(`[createFile] writing ${content.length} bytes to "${filePath}"`);
-      vfs.writeFileSync(filePath, content, "utf-8");
-      fileState.current = { path: filePath, content };
+      logger.debug?.(`[createFile] writing ${content.length} bytes to "${normalizedPath}"`);
+      vfs.writeFileSync(normalizedPath, content, "utf-8");
+      fileState.current = { path: normalizedPath, content };
 
       const preview = content.length > 200 ? content.slice(0, 200) + "..." : content;
       logger.debug?.(`[createFile] success, contentLength=${content.length}`);
 
       return JSON.stringify({
         success: true,
-        path: filePath,
+        path: normalizedPath,
         contentLength: content.length,
         preview,
       });
@@ -352,7 +357,8 @@ const createFileTool = tool(
 
   const editFileTool = tool(
     async ({ path: filePath, old_text, new_text, count }: { path: string; old_text: string; new_text: string; count: number | null }) => {
-      logger.debug?.(`[editFile] path="${filePath}" old_textLength=${old_text.length} new_textLength=${new_text.length} count=${count}`);
+      const normalizedPath = normalizeVfsPath(filePath);
+      logger.debug?.(`[editFile] path="${normalizedPath}" old_textLength=${old_text.length} new_textLength=${new_text.length} count=${count}`);
 
       if (!fileState.current) {
         const error = "No file has been created yet. Use create_file first.";
@@ -363,9 +369,9 @@ const createFileTool = tool(
         });
       }
 
-      const isUnderOutputDir = vfs.shouldHandle(filePath);
+      const isUnderOutputDir = vfs.shouldHandle(normalizedPath);
       if (!isUnderOutputDir) {
-        const error = `Security: Path "${filePath}" escapes output directory`;
+        const error = `Security: Path "${normalizedPath}" escapes output directory`;
         logger.debug?.(`[editFile] ${error}`);
         throw new Error(error);
       }
@@ -397,15 +403,15 @@ const createFileTool = tool(
         }, "");
       }
 
-      logger.debug?.(`[editFile] writing ${newContent.length} bytes to "${filePath}"`);
-      vfs.writeFileSync(filePath, newContent, "utf-8");
-      fileState.current = { path: filePath, content: newContent };
+      logger.debug?.(`[editFile] writing ${newContent.length} bytes to "${normalizedPath}"`);
+      vfs.writeFileSync(normalizedPath, newContent, "utf-8");
+      fileState.current = { path: normalizedPath, content: newContent };
 
       logger.debug?.(`[editFile] success, replaced ${replaceCount} occurrence(s)`);
 
       return JSON.stringify({
         success: true,
-        path: filePath,
+        path: normalizedPath,
         edit_summary: `Replaced ${count ?? 1} occurrence(s) of text (${old_text.length} chars) with (${new_text.length} chars)`,
       });
     },

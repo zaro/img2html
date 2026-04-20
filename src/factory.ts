@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { VirtualFileSystem } from "@platformatic/vfs";
 import type { Img2HtmlOptions } from "./types/options.js";
 import type { AgentResult, Logger, Stack } from "./agent/img2html-agent.js";
@@ -56,7 +57,6 @@ export async function copyImageToOutput(
 }
 
 function readLocalFile(filePath: string): Buffer | string {
-  const fs = require("fs");
   return fs.readFileSync(filePath);
 }
 
