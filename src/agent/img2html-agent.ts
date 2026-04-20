@@ -233,7 +233,7 @@ ${stackInstructions}
 
 async function initializeModel(modelConfig: ModelConfig) {
   const config: Record<string, unknown> = {
-    temperature: 0,
+    temperature: modelConfig.temperature ?? 0,
     apiKey: modelConfig.apiKey,
   };
 

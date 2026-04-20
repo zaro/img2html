@@ -6,6 +6,7 @@ export interface ModelConfig {
   apiKey: string;
   baseURL?: string;
   defaultHeaders?: Record<string, string>;
+  temperature?: number;
 }
 
 export interface AgentRunnerBaseOptions {

@@ -9,7 +9,7 @@ import { createDefaultVfs } from "../impl/platformatic-vfs.js";
 import type { Stack } from "../agent/img2html-agent.js";
 import type { ModelConfig } from "../types/options.js";
 
-function buildModelConfig(model: string | undefined): ModelConfig {
+function buildModelConfig(model: string | undefined, temperature?: number): ModelConfig {
   if (!model) {
     throw new Error("No model configured. Use -m/--model option or set IMG2HTML_MODEL environment variable");
   }
@@ -29,6 +29,7 @@ function buildModelConfig(model: string | undefined): ModelConfig {
         "HTTP-Referer": process.env.OPENROUTER_REFERRER || "https://github.com/img2html",
         "X-Title": process.env.OPENROUTER_TITLE || "img2html CLI",
       },
+      temperature,
     };
   } else if (model.startsWith("anthropic:")) {
     const modelName = model.replace("anthropic:", "");
@@ -36,14 +37,14 @@ function buildModelConfig(model: string | undefined): ModelConfig {
     if (!apiKey) {
       throw new Error("ANTHROPIC_API_KEY environment variable is not set");
     }
-    return { provider: "anthropic", modelName, apiKey };
+    return { provider: "anthropic", modelName, apiKey, temperature };
   } else if (model.startsWith("gemini:")) {
     const modelName = model.replace("gemini:", "");
     const apiKey = process.env.GOOGLE_API_KEY;
     if (!apiKey) {
       throw new Error("GOOGLE_API_KEY environment variable is not set");
     }
-    return { provider: "google-genai", modelName, apiKey };
+    return { provider: "google-genai", modelName, apiKey, temperature };
   } else if (model.startsWith("minimax:")) {
     const modelName = model.replace("minimax:", "");
     const apiKey = process.env.MINIMAX_API_KEY;
@@ -55,6 +56,7 @@ function buildModelConfig(model: string | undefined): ModelConfig {
       modelName,
       apiKey,
       baseURL: process.env.MINIMAX_BASE_URL || "https://api.minimax.io/v1",
+      temperature,
     };
   }
 
@@ -69,6 +71,7 @@ interface CliOptions {
   prompt?: string;
   maxWidth?: number;
   maxHeight?: number;
+  temperature?: number;
   pricingFile?: string;
 }
 
@@ -93,9 +96,10 @@ async function main() {
     .option("-p, --prompt <text>", "Additional instructions for the agent")
     .option("--max-width <pixels>", "Maximum width to scale image to (maintains aspect ratio)", (val) => val ? parseInt(val, 10) : undefined)
     .option("--max-height <pixels>", "Maximum height to scale image to (maintains aspect ratio)", (val) => val ? parseInt(val, 10) : undefined)
+    .option("-t, --temperature <number>", "Temperature for the model (0-1, default 0)", (val) => val ? parseFloat(val) : undefined)
     .option("--pricing-file <path>", "Path to JSON file with provider pricing for non-OpenRouter models")
     .action(async (imagePath: string, options: Partial<CliOptions>) => {
-      const { stack, model, variants, output, prompt, maxWidth, maxHeight } = options;
+      const { stack, model, variants, output, prompt, maxWidth, maxHeight, temperature } = options;
 
       if (!["html_css", "tailwind"].includes(stack || "")) {
         console.error('Error: Stack must be "html_css" or "tailwind"');
@@ -137,6 +141,7 @@ async function main() {
       console.error(`  Output: ${resolvedOutput}${outputExplicit ? " (explicit)" : " (auto-generated)"}`);
       if (maxWidth) console.error(`  Max Width: ${maxWidth}`);
       if (maxHeight) console.error(`  Max Height: ${maxHeight}`);
+      if (temperature !== undefined) console.error(`  Temperature: ${temperature}`);
       if (prompt) console.error(`  Additional prompt: ${prompt}`);
       console.error("");
 
@@ -161,7 +166,7 @@ async function main() {
           imagePath,
           {
             stack: (stack || "tailwind") as "html_css" | "tailwind",
-            modelConfig: buildModelConfig(model),
+            modelConfig: buildModelConfig(model, temperature),
             additionalPrompt: prompt,
             maxWidth,
             maxHeight,
