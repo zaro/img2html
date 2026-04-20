@@ -1,6 +1,16 @@
+export type ModelProvider = "openai" | "anthropic" | "openrouter" | "google-genai" | "minimax";
+
+export interface ModelConfig {
+  provider: ModelProvider;
+  modelName: string;
+  apiKey: string;
+  baseURL?: string;
+  defaultHeaders?: Record<string, string>;
+}
+
 export interface AgentRunnerBaseOptions {
   stack: "html_css" | "tailwind";
-  modelString: string;
+  modelConfig: ModelConfig;
   additionalPrompt?: string;
   maxWidth?: number;
   maxHeight?: number;

@@ -7,6 +7,59 @@ import { fileURLToPath } from "url";
 import { createAgentRunnerWithFile } from "../factory.js";
 import { createDefaultVfs } from "../impl/platformatic-vfs.js";
 import type { Stack } from "../agent/img2html-agent.js";
+import type { ModelConfig } from "../types/options.js";
+
+function buildModelConfig(model: string | undefined): ModelConfig {
+  if (!model) {
+    throw new Error("No model configured. Use -m/--model option or set IMG2HTML_MODEL environment variable");
+  }
+
+  if (model.startsWith("openrouter:")) {
+    const modelName = model.replace("openrouter:", "");
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      throw new Error("OPENROUTER_API_KEY environment variable is not set");
+    }
+    return {
+      provider: "openrouter",
+      modelName,
+      apiKey,
+      baseURL: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
+      defaultHeaders: {
+        "HTTP-Referer": process.env.OPENROUTER_REFERRER || "https://github.com/img2html",
+        "X-Title": process.env.OPENROUTER_TITLE || "img2html CLI",
+      },
+    };
+  } else if (model.startsWith("anthropic:")) {
+    const modelName = model.replace("anthropic:", "");
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      throw new Error("ANTHROPIC_API_KEY environment variable is not set");
+    }
+    return { provider: "anthropic", modelName, apiKey };
+  } else if (model.startsWith("gemini:")) {
+    const modelName = model.replace("gemini:", "");
+    const apiKey = process.env.GOOGLE_API_KEY;
+    if (!apiKey) {
+      throw new Error("GOOGLE_API_KEY environment variable is not set");
+    }
+    return { provider: "google-genai", modelName, apiKey };
+  } else if (model.startsWith("minimax:")) {
+    const modelName = model.replace("minimax:", "");
+    const apiKey = process.env.MINIMAX_API_KEY;
+    if (!apiKey) {
+      throw new Error("MINIMAX_API_KEY environment variable is not set");
+    }
+    return {
+      provider: "minimax",
+      modelName,
+      apiKey,
+      baseURL: process.env.MINIMAX_BASE_URL || "https://api.minimax.io/v1",
+    };
+  }
+
+  throw new Error(`Unsupported model prefix. Use 'openrouter:', 'anthropic:', 'gemini:', or 'minimax:'`);
+}
 
 interface CliOptions {
   stack: Stack;
@@ -108,7 +161,7 @@ async function main() {
           imagePath,
           {
             stack: (stack || "tailwind") as "html_css" | "tailwind",
-            modelString: model || "openai:gpt-4o",
+            modelConfig: buildModelConfig(model),
             additionalPrompt: prompt,
             maxWidth,
             maxHeight,

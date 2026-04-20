@@ -182,7 +182,7 @@ function runAgentWithMeta(
     {
       imageBuffer,
       stack: options.stack,
-      modelString: options.modelString,
+      modelConfig: options.modelConfig,
       additionalPrompt: options.additionalPrompt,
       logFile: options.logFile,
       storeImageAs: options.storeImageAs,
@@ -201,11 +201,10 @@ async function writeMetaFiles(
   result: AgentResult
 ): Promise<void> {
   if (options.genParamsFile) {
-    const [provider, modelName] = options.modelString.split(":");
     writeGenParams(vfs, logger, {
       imagePath,
-      provider,
-      model: modelName,
+      provider: options.modelConfig.provider,
+      model: options.modelConfig.modelName,
       stack: options.stack,
       maxWidth: options.maxWidth,
       maxHeight: options.maxHeight,
@@ -217,9 +216,10 @@ async function writeMetaFiles(
   }
 
   if (result.tokenUsage) {
-    const pricingInfo = await getPricing(options.modelString);
-    writeTokensJson(vfs, logger, result.tokenUsage, pricingInfo, options.modelString, "/_meta/tokens.json");
-    printTokenSummary(logger, result.tokenUsage, pricingInfo, options.modelString);
+    const modelKey = `${options.modelConfig.provider}:${options.modelConfig.modelName}`;
+    const pricingInfo = await getPricing(modelKey);
+    writeTokensJson(vfs, logger, result.tokenUsage, pricingInfo, modelKey, "/_meta/tokens.json");
+    printTokenSummary(logger, result.tokenUsage, pricingInfo, modelKey);
   }
 }
 

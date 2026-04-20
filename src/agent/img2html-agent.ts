@@ -4,6 +4,7 @@ import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
 import type { LLMResult, ChatGeneration } from "@langchain/core/outputs";
 import { z } from "zod";
 import type { VirtualFileSystem } from "@platformatic/vfs";
+import type { ModelConfig } from "../types/options.js";
 import {
   type TokenUsageAccumulator,
   createTokenAccumulator,
@@ -230,42 +231,38 @@ ${stackInstructions}
   return prompt;
 }
 
-async function initializeModel(modelString: string) {
+async function initializeModel(modelConfig: ModelConfig) {
   const config: Record<string, unknown> = {
     temperature: 0,
+    apiKey: modelConfig.apiKey,
   };
 
-  if (modelString.startsWith("openrouter:")) {
-    const modelName = modelString.replace("openrouter:", "");
-    config.apiKey = process.env.OPENROUTER_API_KEY;
+  if (modelConfig.provider === "openrouter") {
+    config.modelProvider = "openai";
     config.configuration = {
-      baseURL: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
-      defaultHeaders: {
-        "HTTP-Referer": process.env.OPENROUTER_REFERRER || "https://github.com/img2html",
-        "X-Title": process.env.OPENROUTER_TITLE || "img2html CLI",
-      },
+      baseURL: modelConfig.baseURL,
+      defaultHeaders: modelConfig.defaultHeaders,
     };
-    return initChatModel(modelName, { ...config, modelProvider: "openai" });
-  } else if (modelString.startsWith("gemini:")) {
-    const modelName = modelString.replace("gemini:", "");
-    config.apiKey = process.env.GOOGLE_API_KEY;
-    return initChatModel(modelName, { ...config, modelProvider: "google-genai" });
-  } else if (modelString.startsWith("minimax:")) {
-    const modelName = modelString.replace("minimax:", "");
-    config.apiKey = process.env.MINIMAX_API_KEY;
+  } else if (modelConfig.provider === "google-genai") {
+    config.modelProvider = "google-genai";
+  } else if (modelConfig.provider === "minimax") {
+    config.modelProvider = "openai";
     config.configuration = {
-      baseURL: process.env.MINIMAX_BASE_URL || "https://api.minimax.io/v1",
+      baseURL: modelConfig.baseURL,
     };
-    return initChatModel(modelName, { ...config, modelProvider: "openai" });
+  } else if (modelConfig.provider === "anthropic") {
+    config.modelProvider = "anthropic";
+  } else if (modelConfig.provider === "openai") {
+    config.modelProvider = "openai";
   }
 
-  return initChatModel(modelString, config);
+  return initChatModel(modelConfig.modelName, config);
 }
 
 export interface RunAgentOptions {
   imageBuffer: Buffer;
   stack: Stack;
-  modelString: string;
+  modelConfig: ModelConfig;
   additionalPrompt?: string;
   logFile?: string;
   storeImageAs?: string;
@@ -276,15 +273,15 @@ export async function runAgent(
   vfs: VirtualFileSystem,
   logger: Logger
 ): Promise<AgentResult> {
-  const { imageBuffer, stack, modelString, additionalPrompt, logFile, storeImageAs } = options;
+  const { imageBuffer, stack, modelConfig, additionalPrompt, logFile, storeImageAs } = options;
 
   logger.log(`\n${"=".repeat(60)}`);
-  logger.log(`Stack: ${stack} | Model: ${modelString}`);
+  logger.log(`Stack: ${stack} | Model: ${modelConfig.modelName}`);
   logger.log(`${"=".repeat(60)}\n`);
 
   let model;
   try {
-    model = await initializeModel(modelString);
+    model = await initializeModel(modelConfig);
   } catch (error) {
     return {
       success: false,
