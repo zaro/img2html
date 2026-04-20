@@ -6,16 +6,11 @@ import * as fs from "fs";
 import { fileURLToPath } from "url";
 import {
   createAgentRunnerWithOutput,
-  copyImageToOutput,
-  writeGenParams,
-  writeTokensJson,
-  printTokenSummary,
   type WriteOutputOptions,
 } from "../factory.js";
 import { createDefaultVfs } from "../impl/platformatic-vfs.js";
 import type { Img2HtmlOptions } from "../types/options.js";
 import type { Stack } from "../agent/img2html-agent.js";
-import { getPricing } from "../utils/pricing.js";
 
 interface CliOptions {
   stack: Stack;

@@ -4,7 +4,6 @@ import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
 import type { LLMResult, ChatGeneration } from "@langchain/core/outputs";
 import { z } from "zod";
 import type { VirtualFileSystem } from "@platformatic/vfs";
-import { loadImageAsDataUrl, type ImageScalerOptions } from "../utils/image.js";
 import {
   type TokenUsageAccumulator,
   createTokenAccumulator,
@@ -264,11 +263,10 @@ async function initializeModel(modelString: string) {
 }
 
 export interface RunAgentOptions {
-  imagePath: string;
+  imageBuffer: Buffer;
   stack: Stack;
   modelString: string;
   additionalPrompt?: string;
-  imageScalerOptions?: ImageScalerOptions;
   logFile?: string;
 }
 
@@ -277,7 +275,7 @@ export async function runAgent(
   vfs: VirtualFileSystem,
   logger: Logger
 ): Promise<AgentResult> {
-  const { imagePath, stack, modelString, additionalPrompt, imageScalerOptions, logFile } = options;
+  const { imageBuffer, stack, modelString, additionalPrompt, logFile } = options;
 
   logger.log(`\n${"=".repeat(60)}`);
   logger.log(`Stack: ${stack} | Model: ${modelString}`);
@@ -295,17 +293,20 @@ export async function runAgent(
     };
   }
 
-  let imageDataUrl: string;
+  const imagePath = "/input-image.png";
   try {
-    imageDataUrl = await loadImageAsDataUrl(imagePath, imageScalerOptions);
+    vfs.writeFileSync(imagePath, imageBuffer);
+    logger.debug?.(`Image written to VFS: ${imagePath}`);
   } catch (error) {
     return {
       success: false,
       iterations: 0,
       tokenUsage: null,
-      error: `Failed to load image: ${error instanceof Error ? error.message : String(error)}`,
+      error: `Failed to write image to VFS: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
+
+  const imageDataUrl = `data:image/png;base64,${imageBuffer.toString("base64")}`;
 
   const fileState: { current: { path: string; content: string } | null } = { current: null };
 
@@ -557,5 +558,3 @@ const createFileTool = tool(
 export function serializeLogMessages(entries: Array<{ messages: BaseMessage[]; timestamp: Date }>): object[] {
   return serializeMessages(entries);
 }
-
-export { loadImageAsDataUrl };

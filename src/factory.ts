@@ -25,39 +25,72 @@ function defaultLogger(debug: boolean = false): Logger {
   };
 }
 
-export async function copyImageToOutput(
+async function scaleImageBuffer(buffer: Buffer, options: { maxWidth?: number; maxHeight?: number }): Promise<Buffer> {
+  const sharp = (await import("sharp")).default;
+  const { maxWidth, maxHeight } = options;
+
+  if (!maxWidth && !maxHeight) {
+    return buffer;
+  }
+
+  const metadata = await sharp(buffer).metadata();
+  if (!metadata.width || !metadata.height) {
+    return buffer;
+  }
+
+  let targetWidth = maxWidth;
+  let targetHeight = maxHeight;
+
+  if (targetWidth && targetHeight) {
+    const ratio = Math.min(targetWidth / metadata.width, targetHeight / metadata.height);
+    if (ratio >= 1) return buffer;
+    targetWidth = Math.round(metadata.width * ratio);
+    targetHeight = Math.round(metadata.height * ratio);
+  } else if (targetWidth) {
+    if (targetWidth >= metadata.width) return buffer;
+    targetHeight = Math.round(metadata.height * (targetWidth / metadata.width));
+  } else if (targetHeight) {
+    if (targetHeight >= metadata.height) return buffer;
+    targetWidth = Math.round(metadata.width * (targetHeight / metadata.height));
+  }
+
+  return sharp(buffer).resize(targetWidth, targetHeight, { fit: "inside" }).toBuffer();
+}
+
+function readLocalFile(filePath: string): Buffer {
+  return fs.readFileSync(filePath);
+}
+
+export async function loadImageBuffer(
   imagePath: string,
-  vfs: VirtualFileSystem,
-  logger: Logger
-): Promise<void> {
+  logger: Logger,
+  scalerOptions?: { maxWidth?: number; maxHeight?: number }
+): Promise<Buffer | null> {
   const isUrl = imagePath.startsWith("http://") || imagePath.startsWith("https://");
-  const ext = imagePath.includes(".")
-    ? imagePath.split(".").pop() || ".png"
-    : ".png";
-  const fileName = `input-image${ext}`;
-  const destPath = `/${fileName}`;
 
   try {
+    let buffer: Buffer;
+
     if (isUrl) {
       const response = await fetch(imagePath);
       if (!response.ok) {
         logger.log(`Warning: Failed to fetch image from URL: ${response.statusText}`);
-        return;
+        return null;
       }
-      const buffer = Buffer.from(await response.arrayBuffer());
-      vfs.writeFileSync(destPath, buffer);
+      buffer = Buffer.from(await response.arrayBuffer());
     } else {
-      const fileContent = readLocalFile(imagePath);
-      vfs.writeFileSync(destPath, fileContent);
+      buffer = readLocalFile(imagePath);
     }
-    logger.log(`Original image copied to: ${destPath}`);
-  } catch (error) {
-    logger.log(`Warning: Failed to copy image: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
 
-function readLocalFile(filePath: string): Buffer | string {
-  return fs.readFileSync(filePath);
+    if (scalerOptions && (scalerOptions.maxWidth || scalerOptions.maxHeight)) {
+      buffer = await scaleImageBuffer(buffer, scalerOptions);
+    }
+
+    return buffer;
+  } catch (error) {
+    logger.log(`Warning: Failed to load image: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
 }
 
 export function writeGenParams(
@@ -153,15 +186,26 @@ export function createAgentRunner(
 ): AgentRunner {
   return {
     run: async (): Promise<AgentResult> => {
+      const scalerOptions = options.maxWidth || options.maxHeight
+        ? { maxWidth: options.maxWidth, maxHeight: options.maxHeight }
+        : undefined;
+
+      const imageBuffer = await loadImageBuffer(options.imagePath, logger, scalerOptions);
+      if (!imageBuffer) {
+        return {
+          success: false,
+          iterations: 0,
+          tokenUsage: null,
+          error: "Failed to load image buffer",
+        };
+      }
+
       return runAgent(
         {
-          imagePath: options.imagePath,
+          imageBuffer,
           stack: options.stack,
           modelString: options.modelString,
           additionalPrompt: options.additionalPrompt,
-          imageScalerOptions: options.maxWidth || options.maxHeight
-            ? { maxWidth: options.maxWidth, maxHeight: options.maxHeight }
-            : undefined,
           logFile: options.logFile,
         },
         vfs,
@@ -179,19 +223,30 @@ export function createAgentRunnerWithOutput(
 ): AgentRunner {
   return {
     run: async (): Promise<AgentResult> => {
+      const scalerOptions = options.maxWidth || options.maxHeight
+        ? { maxWidth: options.maxWidth, maxHeight: options.maxHeight }
+        : undefined;
+
+      const imageBuffer = await loadImageBuffer(options.imagePath, logger, scalerOptions);
+      if (!imageBuffer) {
+        return {
+          success: false,
+          iterations: 0,
+          tokenUsage: null,
+          error: "Failed to load image buffer",
+        };
+      }
+
       if (outputFiles.copyImage) {
-        await copyImageToOutput(options.imagePath, vfs, logger);
+        logger.log(`Image stored at: /input-image.png`);
       }
 
       const result = await runAgent(
         {
-          imagePath: options.imagePath,
+          imageBuffer,
           stack: options.stack,
           modelString: options.modelString,
           additionalPrompt: options.additionalPrompt,
-          imageScalerOptions: options.maxWidth || options.maxHeight
-            ? { maxWidth: options.maxWidth, maxHeight: options.maxHeight }
-            : undefined,
           logFile: outputFiles.log,
         },
         vfs,
