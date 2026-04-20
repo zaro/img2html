@@ -20,7 +20,6 @@ interface CliOptions {
   prompt?: string;
   maxWidth?: number;
   maxHeight?: number;
-  logFile?: string;
   pricingFile?: string;
 }
 
@@ -45,10 +44,9 @@ async function main() {
     .option("-p, --prompt <text>", "Additional instructions for the agent")
     .option("--max-width <pixels>", "Maximum width to scale image to (maintains aspect ratio)", (val) => val ? parseInt(val, 10) : undefined)
     .option("--max-height <pixels>", "Maximum height to scale image to (maintains aspect ratio)", (val) => val ? parseInt(val, 10) : undefined)
-    .option("--log-file [filename]", "Filename for agent conversation log (written to output dir)")
     .option("--pricing-file <path>", "Path to JSON file with provider pricing for non-OpenRouter models")
     .action(async (imagePath: string, options: Partial<CliOptions>) => {
-      const { stack, model, variants, output, prompt, maxWidth, maxHeight, logFile, pricingFile } = options;
+      const { stack, model, variants, output, prompt, maxWidth, maxHeight } = options;
 
       if (!["html_css", "tailwind"].includes(stack || "")) {
         console.error('Error: Stack must be "html_css" or "tailwind"');
@@ -90,7 +88,6 @@ async function main() {
       console.error(`  Output: ${resolvedOutput}${outputExplicit ? " (explicit)" : " (auto-generated)"}`);
       if (maxWidth) console.error(`  Max Width: ${maxWidth}`);
       if (maxHeight) console.error(`  Max Height: ${maxHeight}`);
-      if (logFile !== undefined) console.error(`  Log File: ${logFile || "conversation.json"}`);
       if (prompt) console.error(`  Additional prompt: ${prompt}`);
       console.error("");
 
@@ -106,17 +103,6 @@ async function main() {
           fs.mkdirSync(variantOutputDir, { recursive: true });
         }
 
-        let variantLogFile: string | undefined;
-        if (logFile !== undefined) {
-          const baseName = typeof logFile === "string" ? logFile : "conversation";
-          const cleanName = baseName.replace(/\.json$/, "");
-          if (variants && variants > 1) {
-            variantLogFile = `/_meta/${cleanName}-${i}.json`;
-          } else {
-            variantLogFile = `/_meta/${cleanName}.json`;
-          }
-        }
-
         const img2htmlOptions: Img2HtmlOptions = {
           imagePath,
           stack: (stack || "tailwind") as "html_css" | "tailwind",
@@ -124,13 +110,11 @@ async function main() {
           additionalPrompt: prompt,
           maxWidth,
           maxHeight,
-          logFile: variantLogFile,
         };
 
         const outputFiles: WriteOutputOptions = {
           genParams: "/_meta/gen-params.json",
           tokens: "/_meta/tokens.json",
-          log: variantLogFile,
         };
 
         const vfs = createDefaultVfs(variantOutputDir);

@@ -14,7 +14,7 @@ export interface AgentRunner {
 export interface WriteOutputOptions {
   genParams?: string;
   tokens?: string;
-  log?: string;
+  logFile?: string;
 }
 
 function defaultLogger(debug: boolean = false): Logger {
@@ -205,7 +205,7 @@ export function createAgentRunner(
           stack: options.stack,
           modelString: options.modelString,
           additionalPrompt: options.additionalPrompt,
-          logFile: options.logFile,
+          logFile: undefined,
         },
         vfs,
         logger
@@ -242,7 +242,7 @@ export function createAgentRunnerWithOutput(
           stack: options.stack,
           modelString: options.modelString,
           additionalPrompt: options.additionalPrompt,
-          logFile: outputFiles.log,
+          logFile: outputFiles.logFile,
         },
         vfs,
         logger

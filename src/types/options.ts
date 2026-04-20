@@ -5,5 +5,4 @@ export interface Img2HtmlOptions {
   additionalPrompt?: string;
   maxWidth?: number;
   maxHeight?: number;
-  logFile?: string;
 }
