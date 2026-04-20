@@ -15,7 +15,6 @@ export interface WriteOutputOptions {
   genParams?: string;
   tokens?: string;
   log?: string;
-  copyImage?: string;
 }
 
 function defaultLogger(debug: boolean = false): Logger {
@@ -235,10 +234,6 @@ export function createAgentRunnerWithOutput(
           tokenUsage: null,
           error: "Failed to load image buffer",
         };
-      }
-
-      if (outputFiles.copyImage) {
-        logger.log(`Image stored at: /input-image.png`);
       }
 
       const result = await runAgent(

@@ -111,9 +111,9 @@ async function main() {
           const baseName = typeof logFile === "string" ? logFile : "conversation";
           const cleanName = baseName.replace(/\.json$/, "");
           if (variants && variants > 1) {
-            variantLogFile = `/${cleanName}-${i}.json`;
+            variantLogFile = `/_meta/${cleanName}-${i}.json`;
           } else {
-            variantLogFile = `/${cleanName}.json`;
+            variantLogFile = `/_meta/${cleanName}.json`;
           }
         }
 
@@ -128,10 +128,9 @@ async function main() {
         };
 
         const outputFiles: WriteOutputOptions = {
-          genParams: "/gen-params.json",
-          tokens: "/tokens.json",
+          genParams: "/_meta/gen-params.json",
+          tokens: "/_meta/tokens.json",
           log: variantLogFile,
-          copyImage: "/input-image.png",
         };
 
         const vfs = createDefaultVfs(variantOutputDir);

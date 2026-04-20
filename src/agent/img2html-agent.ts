@@ -293,10 +293,10 @@ export async function runAgent(
     };
   }
 
-  const imagePath = "/input-image.png";
+  const imagePath = "/_meta/input-image.png";
   try {
     vfs.writeFileSync(imagePath, imageBuffer);
-    logger.debug?.(`Image written to VFS: ${imagePath}`);
+    logger.log(`Image stored at: ${imagePath}`);
   } catch (error) {
     return {
       success: false,
