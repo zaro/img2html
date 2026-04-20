@@ -4,12 +4,8 @@ import { Command } from "commander";
 import * as path from "path";
 import * as fs from "fs";
 import { fileURLToPath } from "url";
-import {
-  createAgentRunnerWithOutput,
-  type WriteOutputOptions,
-} from "../factory.js";
+import { createAgentRunnerWithFile } from "../factory.js";
 import { createDefaultVfs } from "../impl/platformatic-vfs.js";
-import type { Img2HtmlOptions } from "../types/options.js";
 import type { Stack } from "../agent/img2html-agent.js";
 
 interface CliOptions {
@@ -103,26 +99,26 @@ async function main() {
           fs.mkdirSync(variantOutputDir, { recursive: true });
         }
 
-        const img2htmlOptions: Img2HtmlOptions = {
-          imagePath,
-          stack: (stack || "tailwind") as "html_css" | "tailwind",
-          modelString: model || "openai:gpt-4o",
-          additionalPrompt: prompt,
-          maxWidth,
-          maxHeight,
-        };
-
-        const outputFiles: WriteOutputOptions = {
-          genParams: "/_meta/gen-params.json",
-          tokens: "/_meta/tokens.json",
-        };
-
         const vfs = createDefaultVfs(variantOutputDir);
         const logger = {
           log: (msg: string) => console.error(msg),
         };
 
-        const runner = createAgentRunnerWithOutput(img2htmlOptions, vfs, outputFiles, logger);
+        const runner = createAgentRunnerWithFile(
+          imagePath,
+          {
+            stack: (stack || "tailwind") as "html_css" | "tailwind",
+            modelString: model || "openai:gpt-4o",
+            additionalPrompt: prompt,
+            maxWidth,
+            maxHeight,
+            logFile: "/_meta/conversation.json",
+            storeImageAs: "/_meta/input-image.png",
+            genParamsFile: "/_meta/gen-params.json",
+          },
+          vfs,
+          logger
+        );
 
         const result = await runner.run();
 

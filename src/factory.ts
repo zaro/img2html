@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import type { VirtualFileSystem } from "@platformatic/vfs";
-import type { Img2HtmlOptions } from "./types/options.js";
+import type { AgentRunnerBaseOptions } from "./types/options.js";
 import type { AgentResult, Logger, Stack } from "./agent/img2html-agent.js";
 import type { TokenUsageAccumulator } from "./types/token-usage.js";
 import { runAgent } from "./agent/img2html-agent.js";
@@ -9,12 +9,6 @@ import { calculateCost } from "./types/token-usage.js";
 
 export interface AgentRunner {
   run(): Promise<AgentResult>;
-}
-
-export interface WriteOutputOptions {
-  genParams?: string;
-  tokens?: string;
-  logFile?: string;
 }
 
 function defaultLogger(debug: boolean = false): Logger {
@@ -178,56 +172,94 @@ export function printTokenSummary(
   }
 }
 
+function runAgentWithMeta(
+  imageBuffer: Buffer,
+  options: AgentRunnerBaseOptions,
+  vfs: VirtualFileSystem,
+  logger: Logger
+): Promise<AgentResult> {
+  const result = runAgent(
+    {
+      imageBuffer,
+      stack: options.stack,
+      modelString: options.modelString,
+      additionalPrompt: options.additionalPrompt,
+      logFile: options.logFile,
+      storeImageAs: options.storeImageAs,
+    },
+    vfs,
+    logger
+  );
+  return result;
+}
+
+async function writeMetaFiles(
+  imagePath: string,
+  options: AgentRunnerBaseOptions,
+  vfs: VirtualFileSystem,
+  logger: Logger,
+  result: AgentResult
+): Promise<void> {
+  if (options.genParamsFile) {
+    const [provider, modelName] = options.modelString.split(":");
+    writeGenParams(vfs, logger, {
+      imagePath,
+      provider,
+      model: modelName,
+      stack: options.stack,
+      maxWidth: options.maxWidth,
+      maxHeight: options.maxHeight,
+      additionalPrompt: options.additionalPrompt,
+      timestamp: new Date().toISOString(),
+      success: result.success,
+      error: result.error || undefined,
+    }, options.genParamsFile);
+  }
+
+  if (result.tokenUsage) {
+    const pricingInfo = await getPricing(options.modelString);
+    writeTokensJson(vfs, logger, result.tokenUsage, pricingInfo, options.modelString, "/_meta/tokens.json");
+    printTokenSummary(logger, result.tokenUsage, pricingInfo, options.modelString);
+  }
+}
+
+function ensureMetaDir(options: AgentRunnerBaseOptions, vfs: VirtualFileSystem): void {
+  if (options.storeImageAs || options.logFile || options.genParamsFile) {
+    vfs.mkdirSync("/_meta", { recursive: true });
+  }
+}
+
 export function createAgentRunner(
-  options: Img2HtmlOptions,
+  imageBuffer: Buffer,
+  options: AgentRunnerBaseOptions,
   vfs: VirtualFileSystem,
   logger: Logger = defaultLogger(true)
 ): AgentRunner {
   return {
     run: async (): Promise<AgentResult> => {
-      const scalerOptions = options.maxWidth || options.maxHeight
-        ? { maxWidth: options.maxWidth, maxHeight: options.maxHeight }
-        : undefined;
-
-      const imageBuffer = await loadImageBuffer(options.imagePath, logger, scalerOptions);
-      if (!imageBuffer) {
-        return {
-          success: false,
-          iterations: 0,
-          tokenUsage: null,
-          error: "Failed to load image buffer",
-        };
-      }
-
-      return runAgent(
-        {
-          imageBuffer,
-          stack: options.stack,
-          modelString: options.modelString,
-          additionalPrompt: options.additionalPrompt,
-          logFile: undefined,
-          storeImageAs: undefined,
-        },
-        vfs,
-        logger
-      );
+      ensureMetaDir(options, vfs);
+      const result = await runAgentWithMeta(imageBuffer, options, vfs, logger);
+      await writeMetaFiles("", options, vfs, logger, result);
+      return result;
     },
   };
 }
 
-export function createAgentRunnerWithOutput(
-  options: Img2HtmlOptions,
+export function createAgentRunnerWithFile(
+  imagePath: string,
+  options: AgentRunnerBaseOptions,
   vfs: VirtualFileSystem,
-  outputFiles: WriteOutputOptions,
   logger: Logger = defaultLogger(true)
 ): AgentRunner {
   return {
     run: async (): Promise<AgentResult> => {
+      ensureMetaDir(options, vfs);
+
       const scalerOptions = options.maxWidth || options.maxHeight
         ? { maxWidth: options.maxWidth, maxHeight: options.maxHeight }
         : undefined;
 
-      const imageBuffer = await loadImageBuffer(options.imagePath, logger, scalerOptions);
+      const imageBuffer = await loadImageBuffer(imagePath, logger, scalerOptions);
       if (!imageBuffer) {
         return {
           success: false,
@@ -237,42 +269,8 @@ export function createAgentRunnerWithOutput(
         };
       }
 
-      const result = await runAgent(
-        {
-          imageBuffer,
-          stack: options.stack,
-          modelString: options.modelString,
-          additionalPrompt: options.additionalPrompt,
-          logFile: outputFiles.logFile,
-          storeImageAs: "/_meta/input-image.png",
-        },
-        vfs,
-        logger
-      );
-
-      const [provider, modelName] = options.modelString.split(":");
-
-      if (outputFiles.genParams) {
-        writeGenParams(vfs, logger, {
-          imagePath: options.imagePath,
-          provider,
-          model: modelName,
-          stack: options.stack,
-          maxWidth: options.maxWidth,
-          maxHeight: options.maxHeight,
-          additionalPrompt: options.additionalPrompt,
-          timestamp: new Date().toISOString(),
-          success: result.success,
-          error: result.error || undefined,
-        }, outputFiles.genParams);
-      }
-
-      if (outputFiles.tokens && result.tokenUsage) {
-        const pricingInfo = await getPricing(options.modelString);
-        writeTokensJson(vfs, logger, result.tokenUsage, pricingInfo, options.modelString, outputFiles.tokens);
-        printTokenSummary(logger, result.tokenUsage, pricingInfo, options.modelString);
-      }
-
+      const result = await runAgentWithMeta(imageBuffer, options, vfs, logger);
+      await writeMetaFiles(imagePath, options, vfs, logger, result);
       return result;
     },
   };
