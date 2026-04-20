@@ -268,6 +268,7 @@ export interface RunAgentOptions {
   modelString: string;
   additionalPrompt?: string;
   logFile?: string;
+  storeImageAs?: string;
 }
 
 export async function runAgent(
@@ -275,7 +276,7 @@ export async function runAgent(
   vfs: VirtualFileSystem,
   logger: Logger
 ): Promise<AgentResult> {
-  const { imageBuffer, stack, modelString, additionalPrompt, logFile } = options;
+  const { imageBuffer, stack, modelString, additionalPrompt, logFile, storeImageAs } = options;
 
   logger.log(`\n${"=".repeat(60)}`);
   logger.log(`Stack: ${stack} | Model: ${modelString}`);
@@ -293,20 +294,21 @@ export async function runAgent(
     };
   }
 
-  const imagePath = "/_meta/input-image.png";
-  try {
-    vfs.writeFileSync(imagePath, imageBuffer);
-    logger.log(`Image stored at: ${imagePath}`);
-  } catch (error) {
-    return {
-      success: false,
-      iterations: 0,
-      tokenUsage: null,
-      error: `Failed to write image to VFS: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-
   const imageDataUrl = `data:image/png;base64,${imageBuffer.toString("base64")}`;
+
+  if (storeImageAs) {
+    try {
+      vfs.writeFileSync(storeImageAs, imageBuffer);
+      logger.log(`Image stored at: ${storeImageAs}`);
+    } catch (error) {
+      return {
+        success: false,
+        iterations: 0,
+        tokenUsage: null,
+        error: `Failed to write image to VFS: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
 
   const fileState: { current: { path: string; content: string } | null } = { current: null };
 

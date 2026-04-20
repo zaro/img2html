@@ -206,6 +206,7 @@ export function createAgentRunner(
           modelString: options.modelString,
           additionalPrompt: options.additionalPrompt,
           logFile: undefined,
+          storeImageAs: undefined,
         },
         vfs,
         logger
@@ -243,6 +244,7 @@ export function createAgentRunnerWithOutput(
           modelString: options.modelString,
           additionalPrompt: options.additionalPrompt,
           logFile: outputFiles.logFile,
+          storeImageAs: "/_meta/input-image.png",
         },
         vfs,
         logger
