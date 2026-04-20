@@ -78,8 +78,8 @@ export async function fetchOpenRouterPricing(apiKey: string): Promise<PricingCac
     for (const model of data.data) {
       if (model.pricing?.prompt !== undefined && model.pricing?.completion !== undefined) {
         openRouterCache[model.id] = {
-          promptPer1M: model.pricing.prompt,
-          completionPer1M: model.pricing.completion,
+          promptPer1M: model.pricing.prompt * 1_000_000,
+          completionPer1M: model.pricing.completion * 1_000_000,
         };
       }
     }

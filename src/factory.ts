@@ -1,0 +1,227 @@
+import type { VirtualFileSystem } from "@platformatic/vfs";
+import type { Img2HtmlOptions } from "./types/options.js";
+import type { AgentResult, Logger, Stack } from "./agent/img2html-agent.js";
+import type { TokenUsageAccumulator } from "./types/token-usage.js";
+import { runAgent } from "./agent/img2html-agent.js";
+import { getPricing, formatCost, formatTokenCount } from "./utils/pricing.js";
+import { calculateCost } from "./types/token-usage.js";
+
+export interface AgentRunner {
+  run(): Promise<AgentResult>;
+}
+
+export interface WriteOutputOptions {
+  genParams?: string;
+  tokens?: string;
+  log?: string;
+  copyImage?: string;
+}
+
+function defaultLogger(debug: boolean = false): Logger {
+  return {
+    log: (msg: string) => console.error(msg),
+    debug: debug ? (msg: string) => console.log(msg) : undefined,
+  };
+}
+
+export async function copyImageToOutput(
+  imagePath: string,
+  vfs: VirtualFileSystem,
+  logger: Logger
+): Promise<void> {
+  const isUrl = imagePath.startsWith("http://") || imagePath.startsWith("https://");
+  const ext = imagePath.includes(".")
+    ? imagePath.split(".").pop() || ".png"
+    : ".png";
+  const fileName = `input-image${ext}`;
+  const destPath = `/${fileName}`;
+
+  try {
+    if (isUrl) {
+      const response = await fetch(imagePath);
+      if (!response.ok) {
+        logger.log(`Warning: Failed to fetch image from URL: ${response.statusText}`);
+        return;
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
+      vfs.writeFileSync(destPath, buffer);
+    } else {
+      const fileContent = readLocalFile(imagePath);
+      vfs.writeFileSync(destPath, fileContent);
+    }
+    logger.log(`Original image copied to: ${destPath}`);
+  } catch (error) {
+    logger.log(`Warning: Failed to copy image: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function readLocalFile(filePath: string): Buffer | string {
+  const fs = require("fs");
+  return fs.readFileSync(filePath);
+}
+
+export function writeGenParams(
+  vfs: VirtualFileSystem,
+  logger: Logger,
+  params: {
+    imagePath: string;
+    provider: string;
+    model: string;
+    stack: Stack;
+    maxWidth?: number;
+    maxHeight?: number;
+    additionalPrompt?: string;
+    timestamp: string;
+    success: boolean;
+    error?: string;
+  },
+  filename: string = "/gen-params.json"
+): void {
+  try {
+    vfs.writeFileSync(filename, JSON.stringify(params, null, 2), "utf-8");
+    logger.log(`Generation params written to: ${filename}`);
+  } catch (error) {
+    logger.log(`Warning: Failed to write gen-params.json: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+export function writeTokensJson(
+  vfs: VirtualFileSystem,
+  logger: Logger,
+  tokenUsage: TokenUsageAccumulator,
+  pricingInfo: {
+    pricing: { promptPer1M: number | null; completionPer1M: number | null } | null;
+    source: string;
+  },
+  modelKey: string,
+  filename: string = "/tokens.json"
+): void {
+  try {
+    const tokensJson = {
+      timestamp: new Date().toISOString(),
+      pricing: {
+        promptPer1M: pricingInfo.pricing?.promptPer1M || null,
+        completionPer1M: pricingInfo.pricing?.completionPer1M || null,
+        currency: "USD",
+        source: pricingInfo.source,
+      },
+      totals: tokenUsage.totals,
+      iterations: tokenUsage.iterations,
+    };
+    vfs.writeFileSync(filename, JSON.stringify(tokensJson, null, 2), "utf-8");
+    logger.log(`Tokens file written to: ${filename}`);
+  } catch (error) {
+    logger.log(`Warning: Failed to write tokens.json: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+export function printTokenSummary(
+  logger: Logger,
+  tokenUsage: TokenUsageAccumulator,
+  pricingInfo: {
+    pricing: { promptPer1M: number | null; completionPer1M: number | null } | null;
+    source: string;
+  },
+  modelKey: string
+): void {
+  const { totals } = tokenUsage;
+
+  logger.log("\nTokens used:");
+  logger.log(`  API calls:        ${totals.apiCalls}`);
+  logger.log(`  Prompt tokens:     ${formatTokenCount(totals.promptTokens)}`);
+  logger.log(`  Completion tokens: ${formatTokenCount(totals.completionTokens)}`);
+  logger.log(`  Total tokens:      ${formatTokenCount(totals.totalTokens)}`);
+
+  if (pricingInfo.pricing) {
+    const cost = calculateCost(
+      { iterations: tokenUsage.iterations, totals },
+      pricingInfo.pricing.promptPer1M,
+      pricingInfo.pricing.completionPer1M
+    );
+    logger.log(`  Estimated cost:    ${formatCost(cost)}`);
+    logger.log(`\n  (Based on: ${modelKey} @ $${pricingInfo.pricing.promptPer1M}/1M prompt, $${pricingInfo.pricing.completionPer1M}/1M completion)`);
+  } else {
+    logger.log(`  Estimated cost:    ${formatCost(null)}`);
+    logger.log(`\n  (Pricing not available for ${modelKey})`);
+  }
+}
+
+export function createAgentRunner(
+  options: Img2HtmlOptions,
+  vfs: VirtualFileSystem,
+  logger: Logger = defaultLogger(true)
+): AgentRunner {
+  return {
+    run: async (): Promise<AgentResult> => {
+      return runAgent(
+        {
+          imagePath: options.imagePath,
+          stack: options.stack,
+          modelString: options.modelString,
+          additionalPrompt: options.additionalPrompt,
+          imageScalerOptions: options.maxWidth || options.maxHeight
+            ? { maxWidth: options.maxWidth, maxHeight: options.maxHeight }
+            : undefined,
+          logFile: options.logFile,
+        },
+        vfs,
+        logger
+      );
+    },
+  };
+}
+
+export function createAgentRunnerWithOutput(
+  options: Img2HtmlOptions,
+  vfs: VirtualFileSystem,
+  outputFiles: WriteOutputOptions,
+  logger: Logger = defaultLogger(true)
+): AgentRunner {
+  return {
+    run: async (): Promise<AgentResult> => {
+      if (outputFiles.copyImage) {
+        await copyImageToOutput(options.imagePath, vfs, logger);
+      }
+
+      const result = await runAgent(
+        {
+          imagePath: options.imagePath,
+          stack: options.stack,
+          modelString: options.modelString,
+          additionalPrompt: options.additionalPrompt,
+          imageScalerOptions: options.maxWidth || options.maxHeight
+            ? { maxWidth: options.maxWidth, maxHeight: options.maxHeight }
+            : undefined,
+          logFile: outputFiles.log,
+        },
+        vfs,
+        logger
+      );
+
+      const [provider, modelName] = options.modelString.split(":");
+
+      if (outputFiles.genParams) {
+        writeGenParams(vfs, logger, {
+          imagePath: options.imagePath,
+          provider,
+          model: modelName,
+          stack: options.stack,
+          maxWidth: options.maxWidth,
+          maxHeight: options.maxHeight,
+          additionalPrompt: options.additionalPrompt,
+          timestamp: new Date().toISOString(),
+          success: result.success,
+          error: result.error || undefined,
+        }, outputFiles.genParams);
+      }
+
+      if (outputFiles.tokens && result.tokenUsage) {
+        const pricingInfo = await getPricing(options.modelString);
+        writeTokensJson(vfs, logger, result.tokenUsage, pricingInfo, options.modelString, outputFiles.tokens);
+        printTokenSummary(logger, result.tokenUsage, pricingInfo, options.modelString);
+      }
+
+      return result;
+    },
+  };
+}

@@ -3,16 +3,13 @@ import { createAgent, tool, HumanMessage, BaseMessage, ToolMessage, AIMessage } 
 import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
 import type { LLMResult, ChatGeneration } from "@langchain/core/outputs";
 import { z } from "zod";
+import type { VirtualFileSystem } from "@platformatic/vfs";
 import { loadImageAsDataUrl, type ImageScalerOptions } from "../utils/image.js";
 import {
   type TokenUsageAccumulator,
   createTokenAccumulator,
   addIterationTokens,
 } from "../types/token-usage.js";
-import * as path from "path";
-import * as fs from "fs";
-
-const MAX_ITERATIONS = 20;
 
 export type Stack = "html_css" | "tailwind";
 
@@ -25,8 +22,14 @@ export interface AgentResult {
   error?: string;
 }
 
+export interface Logger {
+  log: (msg: string) => void;
+  debug?: (msg: string) => void;
+}
+
 class AgentCallbackHandler extends BaseCallbackHandler {
   name = "agent_callback_handler";
+  private logger: Logger;
 
   calls: Array<{ promptTokens: number; completionTokens: number; totalTokens: number }> = [];
   log: Array<{
@@ -36,6 +39,11 @@ class AgentCallbackHandler extends BaseCallbackHandler {
     timestamp: Date;
     runId?: string;
   }> = [];
+
+  constructor(logger: Logger) {
+    super();
+    this.logger = logger;
+  }
 
   async handleChatModelStart(
     _serialized: Record<string, any>,
@@ -60,7 +68,7 @@ class AgentCallbackHandler extends BaseCallbackHandler {
       const completionTokens = tokenUsage.completionTokens ?? 0;
       const totalTokens = tokenUsage.totalTokens ?? (promptTokens + completionTokens);
       this.calls.push({ promptTokens, completionTokens, totalTokens });
-      console.error(`\n[API Call #${this.calls.length}] Prompt: ${promptTokens}, Completion: ${completionTokens}, Total: ${totalTokens}`);
+      this.logger.log(`\n[API Call #${this.calls.length}] Prompt: ${promptTokens}, Completion: ${completionTokens}, Total: ${totalTokens}`);
     }
 
     const aiResponses: BaseMessage[] = [];
@@ -146,23 +154,6 @@ function serializeMessages(entries: Array<{ messages: BaseMessage[]; timestamp: 
       return base;
     })
   );
-}
-
-function writeLogFile(logFile: string, logEntries: Array<{ messages: BaseMessage[]; timestamp: Date }>): void {
-  try {
-    const logDir = path.dirname(logFile);
-    if (!fs.existsSync(logDir)) {
-      fs.mkdirSync(logDir, { recursive: true });
-    }
-    const logData = {
-      timestamp: new Date().toISOString(),
-      messageCount: logEntries.reduce((sum, e) => sum + e.messages.length, 0),
-      messages: serializeMessages(logEntries),
-    };
-    fs.writeFileSync(logFile, JSON.stringify(logData, null, 2), "utf-8");
-  } catch (error) {
-    console.error(`Warning: Failed to write log file: ${error instanceof Error ? error.message : String(error)}`);
-  }
 }
 
 function extractTextContent(chunk: any): string | null {
@@ -272,22 +263,25 @@ async function initializeModel(modelString: string) {
   return initChatModel(modelString, config);
 }
 
-export async function runAgent(options: {
+export interface RunAgentOptions {
   imagePath: string;
   stack: Stack;
   modelString: string;
-  outputDir: string;
   additionalPrompt?: string;
-  variantIndex?: number;
   imageScalerOptions?: ImageScalerOptions;
   logFile?: string;
-}): Promise<AgentResult> {
-  const { imagePath, stack, modelString, outputDir, additionalPrompt, variantIndex, imageScalerOptions, logFile } = options;
+}
 
-  console.error(`\n${"=".repeat(60)}`);
-  console.error(`Generating variant ${variantIndex || 1}`);
-  console.error(`Stack: ${stack} | Model: ${modelString}`);
-  console.error(`${"=".repeat(60)}\n`);
+export async function runAgent(
+  options: RunAgentOptions,
+  vfs: VirtualFileSystem,
+  logger: Logger
+): Promise<AgentResult> {
+  const { imagePath, stack, modelString, additionalPrompt, imageScalerOptions, logFile } = options;
+
+  logger.log(`\n${"=".repeat(60)}`);
+  logger.log(`Stack: ${stack} | Model: ${modelString}`);
+  logger.log(`${"=".repeat(60)}\n`);
 
   let model;
   try {
@@ -315,28 +309,33 @@ export async function runAgent(options: {
 
   const fileState: { current: { path: string; content: string } | null } = { current: null };
 
-  const createFileTool = tool(
+const createFileTool = tool(
     async ({ path: filePath, content }: { path: string; content: string }) => {
-      const resolvedPath = path.resolve(outputDir, filePath);
-      const resolvedOutputDir = path.resolve(outputDir);
-      const isUnderOutputDir = resolvedPath.startsWith(resolvedOutputDir + path.sep) || resolvedPath === resolvedOutputDir;
+      logger.debug?.(`[createFile] path="${filePath}" contentLength=${content.length}`);
+
+      const isUnderOutputDir = vfs.shouldHandle(filePath);
       if (!isUnderOutputDir) {
-        throw new Error(`Security: Path "${filePath}" escapes output directory`);
+        const error = `Security: Path "${filePath}" escapes output directory`;
+        logger.debug?.(`[createFile] ${error}`);
+        throw new Error(error);
       }
 
-      const dir = path.dirname(resolvedPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+      const dir = filePath.split('/').slice(0, -1).join('/') || '/';
+      if (!vfs.existsSync(dir)) {
+        logger.debug?.(`[createFile] creating directory "${dir}"`);
+        vfs.mkdirSync(dir, { recursive: true });
       }
 
-      fs.writeFileSync(resolvedPath, content, "utf-8");
-      fileState.current = { path: resolvedPath, content };
+      logger.debug?.(`[createFile] writing ${content.length} bytes to "${filePath}"`);
+      vfs.writeFileSync(filePath, content, "utf-8");
+      fileState.current = { path: filePath, content };
 
       const preview = content.length > 200 ? content.slice(0, 200) + "..." : content;
+      logger.debug?.(`[createFile] success, contentLength=${content.length}`);
 
       return JSON.stringify({
         success: true,
-        path: resolvedPath,
+        path: filePath,
         contentLength: content.length,
         preview,
       });
@@ -353,36 +352,43 @@ export async function runAgent(options: {
 
   const editFileTool = tool(
     async ({ path: filePath, old_text, new_text, count }: { path: string; old_text: string; new_text: string; count: number | null }) => {
+      logger.debug?.(`[editFile] path="${filePath}" old_textLength=${old_text.length} new_textLength=${new_text.length} count=${count}`);
+
       if (!fileState.current) {
+        const error = "No file has been created yet. Use create_file first.";
+        logger.debug?.(`[editFile] ${error}`);
         return JSON.stringify({
           success: false,
-          error: "No file has been created yet. Use create_file first.",
+          error,
         });
       }
 
-      const resolvedPath = path.resolve(outputDir, filePath);
-      const resolvedOutputDir = path.resolve(outputDir);
-      const isUnderOutputDir = resolvedPath.startsWith(resolvedOutputDir + path.sep) || resolvedPath === resolvedOutputDir;
+      const isUnderOutputDir = vfs.shouldHandle(filePath);
       if (!isUnderOutputDir) {
-        throw new Error(`Security: Path "${filePath}" escapes output directory`);
+        const error = `Security: Path "${filePath}" escapes output directory`;
+        logger.debug?.(`[editFile] ${error}`);
+        throw new Error(error);
       }
 
       let content = fileState.current.content;
 
       if (!content.includes(old_text)) {
+        const error = "Could not find old_text in the file";
+        logger.debug?.(`[editFile] ${error}`);
         return JSON.stringify({
           success: false,
-          error: `Could not find old_text in the file. Make sure the exact string exists.`,
+          error,
           old_text_preview: old_text.slice(0, 100),
         });
       }
 
       const replaceCount = count ?? 1;
+      let newContent: string;
       if (replaceCount === -1) {
-        content = content.split(old_text).join(new_text);
+        newContent = content.split(old_text).join(new_text);
       } else {
         let occurrences = 0;
-        content = content.split(old_text).reduce((acc, part, idx, arr) => {
+        newContent = content.split(old_text).reduce((acc, part, idx, arr) => {
           if (idx < arr.length - 1 && occurrences < replaceCount) {
             occurrences++;
             return acc + part + new_text;
@@ -391,12 +397,15 @@ export async function runAgent(options: {
         }, "");
       }
 
-      fs.writeFileSync(resolvedPath, content, "utf-8");
-      fileState.current = { path: resolvedPath, content };
+      logger.debug?.(`[editFile] writing ${newContent.length} bytes to "${filePath}"`);
+      vfs.writeFileSync(filePath, newContent, "utf-8");
+      fileState.current = { path: filePath, content: newContent };
+
+      logger.debug?.(`[editFile] success, replaced ${replaceCount} occurrence(s)`);
 
       return JSON.stringify({
         success: true,
-        path: resolvedPath,
+        path: filePath,
         edit_summary: `Replaced ${count ?? 1} occurrence(s) of text (${old_text.length} chars) with (${new_text.length} chars)`,
       });
     },
@@ -418,7 +427,7 @@ export async function runAgent(options: {
     systemPrompt: getSystemPrompt(stack),
   });
 
-  const callbackHandler = new AgentCallbackHandler();
+  const callbackHandler = new AgentCallbackHandler(logger);
   let toolCallCount = 0;
 
   const userMessage = new HumanMessage({
@@ -438,9 +447,6 @@ export async function runAgent(options: {
         { callbacks: [callbackHandler] }
       );
     } catch (streamError) {
-      if (logFile) {
-        writeLogFile(logFile, callbackHandler.getLogEntries());
-      }
       return {
         success: false,
         iterations: toolCallCount,
@@ -462,33 +468,27 @@ export async function runAgent(options: {
 
           if (chunkData.tool_calls && chunkData.tool_calls.length > 0) {
             toolCallCount++;
-            console.error(`[Tool calls detected]`);
+            logger.log(`[Tool calls detected]`);
           }
         }
       }
     } catch (iterationError) {
-      if (logFile) {
-        writeLogFile(logFile, callbackHandler.getLogEntries());
-      }
+      const errorMessage = iterationError instanceof Error ? iterationError.message : String(iterationError);
       return {
         success: false,
         iterations: toolCallCount,
         tokenUsage: tokenAccumulator,
-        error: `Iteration error: ${iterationError instanceof Error ? iterationError.message : String(iterationError)}`,
+        error: `Iteration error: ${errorMessage}`,
       };
-    }
-
-    if (logFile) {
-      writeLogFile(logFile, callbackHandler.getLogEntries());
     }
 
     const totalPromptTokens = callbackHandler.calls.reduce((sum, c) => sum + c.promptTokens, 0);
     const totalCompletionTokens = callbackHandler.calls.reduce((sum, c) => sum + c.completionTokens, 0);
     const totalTokensAll = callbackHandler.calls.reduce((sum, c) => sum + c.totalTokens, 0);
-    console.error("\n\nStream completed");
-    console.error(`Total API calls: ${callbackHandler.calls.length}`);
-    console.error(`Total tool calls: ${toolCallCount}`);
-    console.error(`Total tokens - Prompt: ${totalPromptTokens}, Completion: ${totalCompletionTokens}, Combined: ${totalTokensAll}`);
+    logger.log("\n\nStream completed");
+    logger.log(`Total API calls: ${callbackHandler.calls.length}`);
+    logger.log(`Total tool calls: ${toolCallCount}`);
+    logger.log(`Total tokens - Prompt: ${totalPromptTokens}, Completion: ${totalCompletionTokens}, Combined: ${totalTokensAll}`);
 
     for (let i = 0; i < callbackHandler.calls.length; i++) {
       const call = callbackHandler.calls[i];
@@ -496,12 +496,26 @@ export async function runAgent(options: {
     }
     tokenAccumulator.totals.apiCalls = callbackHandler.calls.length;
 
+    if (logFile) {
+      const logEntries = callbackHandler.getLogEntries();
+      const logData = {
+        timestamp: new Date().toISOString(),
+        messageCount: logEntries.reduce((sum, e) => sum + e.messages.length, 0),
+        messages: serializeMessages(logEntries),
+      };
+      try {
+        vfs.writeFileSync(logFile, JSON.stringify(logData, null, 2), "utf-8");
+      } catch (error) {
+        logger.log(`Warning: Failed to write log file: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
     if (fileState.current) {
       const outPath = fileState.current.path;
 
-      console.error(`\n${"=".repeat(60)}`);
-      console.error(`Output written to: ${outPath}`);
-      console.error(`${"=".repeat(60)}\n`);
+      logger.log(`\n${"=".repeat(60)}`);
+      logger.log(`Output written to: ${outPath}`);
+      logger.log(`${"=".repeat(60)}\n`);
 
       return {
         success: true,
@@ -519,14 +533,11 @@ export async function runAgent(options: {
       error: "Agent completed without producing output file",
     };
   } catch (error) {
-    if (logFile) {
-      writeLogFile(logFile, callbackHandler.getLogEntries());
-    }
     const errorMessage = error instanceof Error ? error.message : String(error);
     const errorStack = error instanceof Error ? error.stack : undefined;
-    console.error(`Agent error: ${errorMessage}`);
+    logger.log(`Agent error: ${errorMessage}`);
     if (errorStack) {
-      console.error(`Stack: ${errorStack}`);
+      logger.log(`Stack: ${errorStack}`);
     }
     return {
       success: false,
@@ -535,6 +546,10 @@ export async function runAgent(options: {
       error: errorMessage,
     };
   }
+}
+
+export function serializeLogMessages(entries: Array<{ messages: BaseMessage[]; timestamp: Date }>): object[] {
+  return serializeMessages(entries);
 }
 
 export { loadImageAsDataUrl };
