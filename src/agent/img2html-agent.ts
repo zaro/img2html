@@ -156,16 +156,60 @@ function serializeMessages(entries: Array<{ messages: BaseMessage[]; timestamp: 
   );
 }
 
-function extractTextContent(chunk: any): string | null {
-  if (typeof chunk.content === "string") return chunk.content;
-  if (Array.isArray(chunk.content)) {
-    return chunk.content
-      .filter((c: any) => c.type === "text" && typeof c.text === "string")
-      .map((c: any) => c.text)
-      .join("");
+function extractReasoningAndAnswer(
+  msg: AIMessage,
+  logger?: Logger,
+): { reasoning: string; content: string } {
+  let raw = '';
+  if (typeof msg.content === 'string') {
+    raw = msg.content;
+  } else if (Array.isArray(msg.content)) {
+    raw = msg.content
+      .filter((c) => c.type === 'text')
+      .map((c) => c.text)
+      .join('\n');
   }
-  if (typeof chunk.text === "string") return chunk.text;
-  return null;
+
+  if (logger) {
+    logger.debug?.(`[${msg.id}] raw length=${raw.length}, raw preview: ${raw.substring(0, 300)}`);
+    logger.debug?.(`[${msg.id}] msg.response_metadata keys: ${Object.keys(msg.response_metadata || {}).join(',')}`);
+    logger.debug?.(`[${msg.id}] msg.additional_kwargs keys: ${Object.keys(msg.additional_kwargs || {}).join(',')}`);
+  }
+
+  const meta = msg.response_metadata || msg.additional_kwargs || {};
+
+  let reasoning = '';
+  let answer = raw;
+
+  const metaReasoning = (meta.reasoning_content ||
+    meta.thinking ||
+    meta.reasoning) as string | undefined;
+  if (metaReasoning) {
+    reasoning = metaReasoning.trim();
+    answer = raw.replace(reasoning, '').trim();
+    return { reasoning, content: answer };
+  }
+
+  const thinkRegex = /<think>([\s\S]*?)(?:<\/think>|<\/think>)/gi;
+  const thinkMatches = [...raw.matchAll(thinkRegex)];
+  for (const match of thinkMatches) {
+    reasoning += match[1].trim() + '\n';
+    answer = answer.replace(match[0], '').trim();
+  }
+  if (reasoning) {
+    return { reasoning: reasoning.trim(), content: answer };
+  }
+
+  const thinkingPrefix =
+    /^Thinking:\s*([\s\S]*?)(?:\n\n|\nFinal Answer:|\nAnswer:)/i;
+  const prefixMatch = raw.match(thinkingPrefix);
+  if (prefixMatch) {
+    reasoning = prefixMatch[1].trim();
+    answer = raw.slice(prefixMatch.index! + prefixMatch[0].length).trim();
+    return { reasoning, content: answer };
+  }
+
+  return { reasoning: '', content: raw.trim() };
 }
 
 function getSystemPrompt(stack: Stack): string {
@@ -462,19 +506,40 @@ const createFileTool = tool(
     }
 
     try {
-      for await (const chunk of streamResult) {
-        if (typeof chunk === "string") {
-          process.stdout.write(chunk);
-        } else if (chunk) {
-          const chunkData = chunk as any;
-          const text = extractTextContent(chunkData);
-          if (text) {
-            process.stdout.write(text);
+      for await (const update of streamResult) {
+        for (const [nodeName, nodeOutput] of Object.entries(update)) {
+          const nodeData = nodeOutput as any;
+
+          if (nodeName === 'model_request') {
+            const messages: AIMessage[] = nodeData.messages ?? [];
+            for (const msg of messages) {
+              if (!(msg instanceof AIMessage)) continue;
+
+              const toolCalls = (msg.tool_calls as { name: string; id?: string }[]) ?? [];
+              if (toolCalls.length > 0) {
+                for (const toolCall of toolCalls) {
+                  toolCallCount++;
+                  logger.log(`[Tool call: ${toolCall.name}]`);
+                }
+                continue;
+              }
+
+              const { reasoning, content } = extractReasoningAndAnswer(msg, logger);
+              if (reasoning) {
+                logger.debug?.(`[${msg.id}] Reasoning (${reasoning.length} chars): ${reasoning.substring(0, 100)}...`);
+              }
+              if (content) {
+                process.stdout.write(content);
+              }
+            }
           }
 
-          if (chunkData.tool_calls && chunkData.tool_calls.length > 0) {
-            toolCallCount++;
-            logger.log(`[Tool calls detected]`);
+          if (nodeName === 'tools') {
+            const toolMessages: ToolMessage[] = nodeData.messages ?? [];
+            for (const toolMsg of toolMessages) {
+              if (!(toolMsg instanceof ToolMessage)) continue;
+              logger.log(`[Tool result: ${toolMsg.name}]`);
+            }
           }
         }
       }
