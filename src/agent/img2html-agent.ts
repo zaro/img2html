@@ -19,6 +19,7 @@ export interface AgentResult {
   content?: string;
   iterations: number;
   tokenUsage: TokenUsageAccumulator | null;
+  usageMetadata?: Array<Record<string, any>>;
   error?: string;
 }
 
@@ -39,6 +40,7 @@ class AgentCallbackHandler extends BaseCallbackHandler {
     timestamp: Date;
     runId?: string;
   }> = [];
+  usageMetadata: Array<Record<string, any>> = [];
 
   constructor(logger: Logger) {
     super();
@@ -75,7 +77,12 @@ class AgentCallbackHandler extends BaseCallbackHandler {
     for (const genList of output.generations) {
       for (const gen of genList) {
         const chatGen = gen as ChatGeneration;
-        if (chatGen.message) aiResponses.push(chatGen.message);
+        if (chatGen.message) {
+          aiResponses.push(chatGen.message);
+          if ('usage_metadata' in chatGen.message && chatGen.message.usage_metadata) {
+            this.usageMetadata.push(chatGen.message.usage_metadata as Record<string, any>);
+          }
+        }
       }
     }
     if (aiResponses.length > 0) {
@@ -111,9 +118,14 @@ class AgentCallbackHandler extends BaseCallbackHandler {
     return this.log;
   }
 
+  getUsageMetadata(): Array<Record<string, any>> {
+    return this.usageMetadata;
+  }
+
   reset() {
     this.calls = [];
     this.log = [];
+    this.usageMetadata = [];
   }
 }
 
@@ -121,6 +133,7 @@ function serializeMessages(entries: Array<{ messages: BaseMessage[]; timestamp: 
   return entries.flatMap(entry =>
     entry.messages.map(msg => {
       const base: Record<string, unknown> = {
+        id: msg.id,
         type: msg._getType(),
         timestamp: entry.timestamp.toISOString(),
       };
@@ -566,6 +579,7 @@ const createFileTool = tool(
       addIterationTokens(tokenAccumulator, i + 1, call.promptTokens, call.completionTokens, 1);
     }
     tokenAccumulator.totals.apiCalls = callbackHandler.calls.length;
+    tokenAccumulator.usageMetadata = callbackHandler.getUsageMetadata();
 
     if (logFile) {
       const logEntries = callbackHandler.getLogEntries();

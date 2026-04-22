@@ -133,6 +133,7 @@ export function writeTokensJson(
       },
       totals: tokenUsage.totals,
       iterations: tokenUsage.iterations,
+      usageMetadata: tokenUsage.usageMetadata ?? [],
     };
     vfs.writeFileSync(filename, JSON.stringify(tokensJson, null, 2), "utf-8");
     logger.log(`Tokens file written to: ${filename}`);

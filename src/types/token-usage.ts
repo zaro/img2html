@@ -33,6 +33,7 @@ export interface TokenUsageAccumulator {
     totalTokens: number;
     apiCalls: number;
   };
+  usageMetadata?: Array<Record<string, any>>;
 }
 
 export function createTokenAccumulator(): TokenUsageAccumulator {
@@ -44,6 +45,7 @@ export function createTokenAccumulator(): TokenUsageAccumulator {
       totalTokens: 0,
       apiCalls: 0,
     },
+    usageMetadata: [],
   };
 }
 
