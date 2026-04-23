@@ -4,10 +4,25 @@ import { Command } from "commander";
 import * as path from "path";
 import * as fs from "fs";
 import { fileURLToPath } from "url";
+import * as cheerio from "cheerio";
+import open from "open";
 import { createAgentRunnerWithFile } from "../factory.js";
 import { createDefaultVfs } from "../impl/platformatic-vfs.js";
 import type { Stack } from "../agent/img2html-agent.js";
 import type { ModelConfig } from "../types/options.js";
+
+function validateHtmlContent(htmlContent: string): { valid: boolean; error?: string } {
+  try {
+    const $ = cheerio.load(htmlContent);
+    const bodyChildren = $("body").children();
+    if (bodyChildren.length === 0) {
+      return { valid: false, error: "No elements found in <body>" };
+    }
+    return { valid: true };
+  } catch (err) {
+    return { valid: false, error: `Failed to parse HTML: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
 
 function buildModelConfig(model: string | undefined, temperature?: number): ModelConfig {
   if (!model) {
@@ -73,6 +88,8 @@ interface CliOptions {
   maxHeight?: number;
   temperature?: number;
   pricingFile?: string;
+  validateHtml?: boolean;
+  open?: boolean;
 }
 
 function generateDefaultOutputDir(): string {
@@ -98,8 +115,10 @@ async function main() {
     .option("--max-height <pixels>", "Maximum height to scale image to (maintains aspect ratio)", (val) => val ? parseInt(val, 10) : undefined)
     .option("-t, --temperature <number>", "Temperature for the model (0-1, default 0)", (val) => val ? parseFloat(val) : undefined)
     .option("--pricing-file <path>", "Path to JSON file with provider pricing for non-OpenRouter models")
+    .option("--validate-html", "Validate HTML after generation (checks for elements in <body>)")
+    .option("-O, --open", "Open generated HTML in browser on success")
     .action(async (imagePath: string, options: Partial<CliOptions>) => {
-      const { stack, model, variants, output, prompt, maxWidth, maxHeight, temperature } = options;
+      const { stack, model, variants, output, prompt, maxWidth, maxHeight, temperature, validateHtml, open: openBrowser } = options;
 
       if (!["html_css", "tailwind"].includes(stack || "")) {
         console.error('Error: Stack must be "html_css" or "tailwind"');
@@ -181,8 +200,33 @@ async function main() {
         const result = await runner.run();
 
         if (result.success) {
-          successCount++;
-          console.error(`\nVariant ${i} completed successfully in ${result.iterations} iterations`);
+          let variantSuccess = true;
+
+          if (validateHtml && result.content) {
+            const validation = validateHtmlContent(result.content);
+            if (!validation.valid) {
+              variantSuccess = false;
+              failureCount++;
+              console.error(`\nVariant ${i} HTML validation failed: ${validation.error}`);
+            } else {
+              console.error(`\nVariant ${i} HTML validation passed`);
+            }
+          }
+
+          if (variantSuccess) {
+            successCount++;
+            console.error(`\nVariant ${i} completed successfully in ${result.iterations} iterations`);
+
+            if (result.outputPath) {
+              const htmlPath = path.join(variantOutputDir, result.outputPath);
+              if (openBrowser) {
+                await open(htmlPath);
+                console.error(`Opened ${htmlPath} in browser`);
+              } else {
+                console.error(`Output: ${htmlPath}`);
+              }
+            }
+          }
         } else {
           failureCount++;
           console.error(`\nVariant ${i} failed: ${result.error}`);

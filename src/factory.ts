@@ -18,17 +18,18 @@ function defaultLogger(debug: boolean = false): Logger {
   };
 }
 
-async function scaleImageBuffer(buffer: Buffer, options: { maxWidth?: number; maxHeight?: number }): Promise<Buffer> {
+async function scaleImageBuffer(buffer: Buffer, options: { maxWidth?: number; maxHeight?: number }): Promise<{ buffer: Buffer; width?: number; height?: number }> {
   const sharp = (await import("sharp")).default;
   const { maxWidth, maxHeight } = options;
 
   if (!maxWidth && !maxHeight) {
-    return buffer;
+    const metadata = await sharp(buffer).metadata();
+    return { buffer, width: metadata.width, height: metadata.height };
   }
 
   const metadata = await sharp(buffer).metadata();
   if (!metadata.width || !metadata.height) {
-    return buffer;
+    return { buffer, width: metadata?.width, height: metadata?.height };
   }
 
   let targetWidth = maxWidth;
@@ -36,18 +37,20 @@ async function scaleImageBuffer(buffer: Buffer, options: { maxWidth?: number; ma
 
   if (targetWidth && targetHeight) {
     const ratio = Math.min(targetWidth / metadata.width, targetHeight / metadata.height);
-    if (ratio >= 1) return buffer;
+    if (ratio >= 1) return { buffer, width: metadata.width, height: metadata.height };
     targetWidth = Math.round(metadata.width * ratio);
     targetHeight = Math.round(metadata.height * ratio);
   } else if (targetWidth) {
-    if (targetWidth >= metadata.width) return buffer;
+    if (targetWidth >= metadata.width) return { buffer, width: metadata.width, height: metadata.height };
     targetHeight = Math.round(metadata.height * (targetWidth / metadata.width));
   } else if (targetHeight) {
-    if (targetHeight >= metadata.height) return buffer;
+    if (targetHeight >= metadata.height) return { buffer, width: metadata.width, height: metadata.height };
     targetWidth = Math.round(metadata.width * (targetHeight / metadata.height));
   }
 
-  return sharp(buffer).resize(targetWidth, targetHeight, { fit: "inside" }).toBuffer();
+  const resizedBuffer = await sharp(buffer).resize(targetWidth, targetHeight, { fit: "inside" }).toBuffer();
+  const resizedMeta = await sharp(resizedBuffer).metadata();
+  return { buffer: resizedBuffer, width: resizedMeta.width, height: resizedMeta.height };
 }
 
 function readLocalFile(filePath: string): Buffer {
@@ -58,7 +61,7 @@ export async function loadImageBuffer(
   imagePath: string,
   logger: Logger,
   scalerOptions?: { maxWidth?: number; maxHeight?: number }
-): Promise<Buffer | null> {
+): Promise<{ buffer: Buffer; width?: number; height?: number } | null> {
   const isUrl = imagePath.startsWith("http://") || imagePath.startsWith("https://");
 
   try {
@@ -76,10 +79,12 @@ export async function loadImageBuffer(
     }
 
     if (scalerOptions && (scalerOptions.maxWidth || scalerOptions.maxHeight)) {
-      buffer = await scaleImageBuffer(buffer, scalerOptions);
+      return await scaleImageBuffer(buffer, scalerOptions);
     }
 
-    return buffer;
+    const sharp = (await import("sharp")).default;
+    const metadata = await sharp(buffer).metadata();
+    return { buffer, width: metadata.width, height: metadata.height };
   } catch (error) {
     logger.log(`Warning: Failed to load image: ${error instanceof Error ? error.message : String(error)}`);
     return null;
@@ -96,6 +101,8 @@ export function writeGenParams(
     stack: Stack;
     maxWidth?: number;
     maxHeight?: number;
+    imageWidth?: number;
+    imageHeight?: number;
     additionalPrompt?: string;
     timestamp: string;
     success: boolean;
@@ -199,7 +206,9 @@ async function writeMetaFiles(
   options: AgentRunnerBaseOptions,
   vfs: VirtualFileSystem,
   logger: Logger,
-  result: AgentResult
+  result: AgentResult,
+  imageWidth?: number,
+  imageHeight?: number
 ): Promise<void> {
   if (options.genParamsFile) {
     writeGenParams(vfs, logger, {
@@ -209,6 +218,8 @@ async function writeMetaFiles(
       stack: options.stack,
       maxWidth: options.maxWidth,
       maxHeight: options.maxHeight,
+      imageWidth,
+      imageHeight,
       additionalPrompt: options.additionalPrompt,
       timestamp: new Date().toISOString(),
       success: result.success,
@@ -260,8 +271,8 @@ export function createAgentRunnerWithFile(
         ? { maxWidth: options.maxWidth, maxHeight: options.maxHeight }
         : undefined;
 
-      const imageBuffer = await loadImageBuffer(imagePath, logger, scalerOptions);
-      if (!imageBuffer) {
+      const imageResult = await loadImageBuffer(imagePath, logger, scalerOptions);
+      if (!imageResult) {
         return {
           success: false,
           iterations: 0,
@@ -270,8 +281,8 @@ export function createAgentRunnerWithFile(
         };
       }
 
-      const result = await runAgentWithMeta(imageBuffer, options, vfs, logger);
-      await writeMetaFiles(imagePath, options, vfs, logger, result);
+      const result = await runAgentWithMeta(imageResult.buffer, options, vfs, logger);
+      await writeMetaFiles(imagePath, options, vfs, logger, result, imageResult.width, imageResult.height);
       return result;
     },
   };
