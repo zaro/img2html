@@ -73,9 +73,18 @@ function buildModelConfig(model: string | undefined, temperature?: number): Mode
       baseURL: process.env.MINIMAX_BASE_URL || "https://api.minimax.io/v1",
       temperature,
     };
+  } else if (model.startsWith("ollama:")) {
+    const modelName = model.replace("ollama:", "");
+    return {
+      provider: "ollama",
+      modelName,
+      apiKey: "",
+      baseURL: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
+      temperature,
+    };
   }
 
-  throw new Error(`Unsupported model prefix. Use 'openrouter:', 'anthropic:', 'gemini:', or 'minimax:'`);
+  throw new Error(`Unsupported model prefix. Use 'openrouter:', 'anthropic:', 'gemini:', 'minimax:', or 'ollama:'`);
 }
 
 interface CliOptions {

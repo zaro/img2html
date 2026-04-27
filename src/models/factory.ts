@@ -1,9 +1,10 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import { ChatOllama } from "@langchain/ollama";
 import { type BaseChatModel } from "@langchain/core/language_models/chat_models";
 
-export type ModelProvider = "openai" | "anthropic" | "openrouter" | "gemini" | "minimax";
+export type ModelProvider = "openai" | "anthropic" | "openrouter" | "gemini" | "minimax" | "ollama";
 
 export interface ModelConfig {
   provider: ModelProvider;
@@ -19,8 +20,8 @@ export function parseModelString(modelString: string): ModelConfig {
     throw new Error(`Invalid model string: ${modelString}. Expected format: provider:model (e.g., openai:gpt-4o)`);
   }
 
-  if (!["openai", "anthropic", "openrouter", "gemini", "minimax"].includes(provider)) {
-    throw new Error(`Unsupported provider: ${provider}. Supported: openai, anthropic, openrouter, gemini, minimax`);
+  if (!["openai", "anthropic", "openrouter", "gemini", "minimax", "ollama"].includes(provider)) {
+    throw new Error(`Unsupported provider: ${provider}. Supported: openai, anthropic, openrouter, gemini, minimax, ollama`);
   }
 
   return { provider, modelName };
@@ -67,6 +68,12 @@ export async function createModel(config: ModelConfig): Promise<BaseChatModel> {
         configuration: {
           baseURL: process.env.MINIMAX_BASE_URL || "https://api.minimax.io/v1",
         },
+        temperature: 0,
+      });
+    case "ollama":
+      return new ChatOllama({
+        model: modelName,
+        baseUrl: config.baseUrl || process.env.OLLAMA_BASE_URL || "http://localhost:11434",
         temperature: 0,
       });
     default:

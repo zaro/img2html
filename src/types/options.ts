@@ -1,4 +1,4 @@
-export type ModelProvider = "openai" | "anthropic" | "openrouter" | "google-genai" | "minimax";
+export type ModelProvider = "openai" | "anthropic" | "openrouter" | "google-genai" | "minimax" | "ollama";
 
 export interface ModelConfig {
   provider: ModelProvider;
