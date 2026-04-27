@@ -23,5 +23,7 @@ jobs:
       - run: npm run build --if-present
       - run: npm test
       - run: npm publish
-
-      - run: npm publish --registry=https://npm.pkg.github.com
+      - uses: JS-DevTools/npm-publish@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          registry: "https://npm.pkg.github.com"
