@@ -1,6 +1,6 @@
 {
   "name": "@zaro/img2html",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "CLI tool to convert images/screenshots to HTML+CSS using AI agents",
   "main": "dist/index.js",
   "type": "module",
@@ -10,7 +10,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/cli/index.js",
-    "dev": "tsx src/cli/index.ts"
+    "dev": "tsx src/cli/index.ts",
+    "test": "true"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.90.0",
