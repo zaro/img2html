@@ -14,7 +14,7 @@ AI-powered CLI tool that converts images and screenshots to HTML+CSS using LangC
 ## Installation
 
 ```bash
-npm install
+npm install @zaro/img2html
 npm run build
 ```
 
