@@ -18,7 +18,10 @@ function defaultLogger(debug: boolean = false): Logger {
   };
 }
 
-async function scaleImageBuffer(buffer: Buffer, options: { maxWidth?: number; maxHeight?: number }): Promise<{ buffer: Buffer; width?: number; height?: number }> {
+export async function scaleImageBuffer(
+  buffer: Buffer,
+  options: { maxWidth?: number; maxHeight?: number },
+): Promise<{ buffer: Buffer; width?: number; height?: number }> {
   const sharp = (await import("sharp")).default;
   const { maxWidth, maxHeight } = options;
 
@@ -36,21 +39,33 @@ async function scaleImageBuffer(buffer: Buffer, options: { maxWidth?: number; ma
   let targetHeight = maxHeight;
 
   if (targetWidth && targetHeight) {
-    const ratio = Math.min(targetWidth / metadata.width, targetHeight / metadata.height);
-    if (ratio >= 1) return { buffer, width: metadata.width, height: metadata.height };
+    const ratio = Math.min(
+      targetWidth / metadata.width,
+      targetHeight / metadata.height,
+    );
+    if (ratio >= 1)
+      return { buffer, width: metadata.width, height: metadata.height };
     targetWidth = Math.round(metadata.width * ratio);
     targetHeight = Math.round(metadata.height * ratio);
   } else if (targetWidth) {
-    if (targetWidth >= metadata.width) return { buffer, width: metadata.width, height: metadata.height };
+    if (targetWidth >= metadata.width)
+      return { buffer, width: metadata.width, height: metadata.height };
     targetHeight = Math.round(metadata.height * (targetWidth / metadata.width));
   } else if (targetHeight) {
-    if (targetHeight >= metadata.height) return { buffer, width: metadata.width, height: metadata.height };
+    if (targetHeight >= metadata.height)
+      return { buffer, width: metadata.width, height: metadata.height };
     targetWidth = Math.round(metadata.width * (targetHeight / metadata.height));
   }
 
-  const resizedBuffer = await sharp(buffer).resize(targetWidth, targetHeight, { fit: "inside" }).toBuffer();
+  const resizedBuffer = await sharp(buffer)
+    .resize(targetWidth, targetHeight, { fit: "inside" })
+    .toBuffer();
   const resizedMeta = await sharp(resizedBuffer).metadata();
-  return { buffer: resizedBuffer, width: resizedMeta.width, height: resizedMeta.height };
+  return {
+    buffer: resizedBuffer,
+    width: resizedMeta.width,
+    height: resizedMeta.height,
+  };
 }
 
 function readLocalFile(filePath: string): Buffer {
@@ -60,9 +75,10 @@ function readLocalFile(filePath: string): Buffer {
 export async function loadImageBuffer(
   imagePath: string,
   logger: Logger,
-  scalerOptions?: { maxWidth?: number; maxHeight?: number }
+  scalerOptions?: { maxWidth?: number; maxHeight?: number },
 ): Promise<{ buffer: Buffer; width?: number; height?: number } | null> {
-  const isUrl = imagePath.startsWith("http://") || imagePath.startsWith("https://");
+  const isUrl =
+    imagePath.startsWith("http://") || imagePath.startsWith("https://");
 
   try {
     let buffer: Buffer;
@@ -70,7 +86,9 @@ export async function loadImageBuffer(
     if (isUrl) {
       const response = await fetch(imagePath);
       if (!response.ok) {
-        logger.log(`Warning: Failed to fetch image from URL: ${response.statusText}`);
+        logger.log(
+          `Warning: Failed to fetch image from URL: ${response.statusText}`,
+        );
         return null;
       }
       buffer = Buffer.from(await response.arrayBuffer());
@@ -86,7 +104,9 @@ export async function loadImageBuffer(
     const metadata = await sharp(buffer).metadata();
     return { buffer, width: metadata.width, height: metadata.height };
   } catch (error) {
-    logger.log(`Warning: Failed to load image: ${error instanceof Error ? error.message : String(error)}`);
+    logger.log(
+      `Warning: Failed to load image: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return null;
   }
 }
@@ -108,13 +128,15 @@ export function writeGenParams(
     success: boolean;
     error?: string;
   },
-  filename: string = "/gen-params.json"
+  filename: string = "/gen-params.json",
 ): void {
   try {
     vfs.writeFileSync(filename, JSON.stringify(params, null, 2), "utf-8");
     logger.log(`Generation params written to: ${filename}`);
   } catch (error) {
-    logger.log(`Warning: Failed to write gen-params.json: ${error instanceof Error ? error.message : String(error)}`);
+    logger.log(
+      `Warning: Failed to write gen-params.json: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 
@@ -123,11 +145,14 @@ export function writeTokensJson(
   logger: Logger,
   tokenUsage: TokenUsageAccumulator,
   pricingInfo: {
-    pricing: { promptPer1M: number | null; completionPer1M: number | null } | null;
+    pricing: {
+      promptPer1M: number | null;
+      completionPer1M: number | null;
+    } | null;
     source: string;
   },
   modelKey: string,
-  filename: string = "/tokens.json"
+  filename: string = "/tokens.json",
 ): void {
   try {
     const tokensJson = {
@@ -145,7 +170,9 @@ export function writeTokensJson(
     vfs.writeFileSync(filename, JSON.stringify(tokensJson, null, 2), "utf-8");
     logger.log(`Tokens file written to: ${filename}`);
   } catch (error) {
-    logger.log(`Warning: Failed to write tokens.json: ${error instanceof Error ? error.message : String(error)}`);
+    logger.log(
+      `Warning: Failed to write tokens.json: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 
@@ -153,27 +180,34 @@ export function printTokenSummary(
   logger: Logger,
   tokenUsage: TokenUsageAccumulator,
   pricingInfo: {
-    pricing: { promptPer1M: number | null; completionPer1M: number | null } | null;
+    pricing: {
+      promptPer1M: number | null;
+      completionPer1M: number | null;
+    } | null;
     source: string;
   },
-  modelKey: string
+  modelKey: string,
 ): void {
   const { totals } = tokenUsage;
 
   logger.log("\nTokens used:");
   logger.log(`  API calls:        ${totals.apiCalls}`);
   logger.log(`  Prompt tokens:     ${formatTokenCount(totals.promptTokens)}`);
-  logger.log(`  Completion tokens: ${formatTokenCount(totals.completionTokens)}`);
+  logger.log(
+    `  Completion tokens: ${formatTokenCount(totals.completionTokens)}`,
+  );
   logger.log(`  Total tokens:      ${formatTokenCount(totals.totalTokens)}`);
 
   if (pricingInfo.pricing) {
     const cost = calculateCost(
       { iterations: tokenUsage.iterations, totals },
       pricingInfo.pricing.promptPer1M,
-      pricingInfo.pricing.completionPer1M
+      pricingInfo.pricing.completionPer1M,
     );
     logger.log(`  Estimated cost:    ${formatCost(cost)}`);
-    logger.log(`\n  (Based on: ${modelKey} @ $${pricingInfo.pricing.promptPer1M}/1M prompt, $${pricingInfo.pricing.completionPer1M}/1M completion)`);
+    logger.log(
+      `\n  (Based on: ${modelKey} @ $${pricingInfo.pricing.promptPer1M}/1M prompt, $${pricingInfo.pricing.completionPer1M}/1M completion)`,
+    );
   } else {
     logger.log(`  Estimated cost:    ${formatCost(null)}`);
     logger.log(`\n  (Pricing not available for ${modelKey})`);
@@ -184,7 +218,7 @@ function runAgentWithMeta(
   imageBuffer: Buffer,
   options: AgentRunnerBaseOptions,
   vfs: VirtualFileSystem,
-  logger: Logger
+  logger: Logger,
 ): Promise<AgentResult> {
   const result = runAgent(
     {
@@ -196,7 +230,7 @@ function runAgentWithMeta(
       storeImageAs: options.storeImageAs,
     },
     vfs,
-    logger
+    logger,
   );
   return result;
 }
@@ -208,34 +242,49 @@ async function writeMetaFiles(
   logger: Logger,
   result: AgentResult,
   imageWidth?: number,
-  imageHeight?: number
+  imageHeight?: number,
 ): Promise<void> {
   if (options.genParamsFile) {
-    writeGenParams(vfs, logger, {
-      imagePath,
-      provider: options.modelConfig.provider,
-      model: options.modelConfig.modelName,
-      stack: options.stack,
-      maxWidth: options.maxWidth,
-      maxHeight: options.maxHeight,
-      imageWidth,
-      imageHeight,
-      additionalPrompt: options.additionalPrompt,
-      timestamp: new Date().toISOString(),
-      success: result.success,
-      error: result.error || undefined,
-    }, options.genParamsFile);
+    writeGenParams(
+      vfs,
+      logger,
+      {
+        imagePath,
+        provider: options.modelConfig.provider,
+        model: options.modelConfig.modelName,
+        stack: options.stack,
+        maxWidth: options.maxWidth,
+        maxHeight: options.maxHeight,
+        imageWidth,
+        imageHeight,
+        additionalPrompt: options.additionalPrompt,
+        timestamp: new Date().toISOString(),
+        success: result.success,
+        error: result.error || undefined,
+      },
+      options.genParamsFile,
+    );
   }
 
   if (result.tokenUsage) {
     const modelKey = `${options.modelConfig.provider}:${options.modelConfig.modelName}`;
     const pricingInfo = await getPricing(modelKey);
-    writeTokensJson(vfs, logger, result.tokenUsage, pricingInfo, modelKey, "/_meta/tokens.json");
+    writeTokensJson(
+      vfs,
+      logger,
+      result.tokenUsage,
+      pricingInfo,
+      modelKey,
+      "/_meta/tokens.json",
+    );
     printTokenSummary(logger, result.tokenUsage, pricingInfo, modelKey);
   }
 }
 
-function ensureMetaDir(options: AgentRunnerBaseOptions, vfs: VirtualFileSystem): void {
+function ensureMetaDir(
+  options: AgentRunnerBaseOptions,
+  vfs: VirtualFileSystem,
+): void {
   if (options.storeImageAs || options.logFile || options.genParamsFile) {
     vfs.mkdirSync("/_meta", { recursive: true });
   }
@@ -245,7 +294,7 @@ export function createAgentRunner(
   imageBuffer: Buffer,
   options: AgentRunnerBaseOptions,
   vfs: VirtualFileSystem,
-  logger: Logger = defaultLogger(true)
+  logger: Logger = defaultLogger(true),
 ): AgentRunner {
   return {
     run: async (): Promise<AgentResult> => {
@@ -261,17 +310,22 @@ export function createAgentRunnerWithFile(
   imagePath: string,
   options: AgentRunnerBaseOptions,
   vfs: VirtualFileSystem,
-  logger: Logger = defaultLogger(true)
+  logger: Logger = defaultLogger(true),
 ): AgentRunner {
   return {
     run: async (): Promise<AgentResult> => {
       ensureMetaDir(options, vfs);
 
-      const scalerOptions = options.maxWidth || options.maxHeight
-        ? { maxWidth: options.maxWidth, maxHeight: options.maxHeight }
-        : undefined;
+      const scalerOptions =
+        options.maxWidth || options.maxHeight
+          ? { maxWidth: options.maxWidth, maxHeight: options.maxHeight }
+          : undefined;
 
-      const imageResult = await loadImageBuffer(imagePath, logger, scalerOptions);
+      const imageResult = await loadImageBuffer(
+        imagePath,
+        logger,
+        scalerOptions,
+      );
       if (!imageResult) {
         return {
           success: false,
@@ -281,8 +335,21 @@ export function createAgentRunnerWithFile(
         };
       }
 
-      const result = await runAgentWithMeta(imageResult.buffer, options, vfs, logger);
-      await writeMetaFiles(imagePath, options, vfs, logger, result, imageResult.width, imageResult.height);
+      const result = await runAgentWithMeta(
+        imageResult.buffer,
+        options,
+        vfs,
+        logger,
+      );
+      await writeMetaFiles(
+        imagePath,
+        options,
+        vfs,
+        logger,
+        result,
+        imageResult.width,
+        imageResult.height,
+      );
       return result;
     },
   };
