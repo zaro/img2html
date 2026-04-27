@@ -311,6 +311,8 @@ async function initializeModel(modelConfig: ModelConfig) {
     config.modelProvider = "anthropic";
   } else if (modelConfig.provider === "openai") {
     config.modelProvider = "openai";
+  } else if (modelConfig.provider === "ollama") {
+    config.modelProvider = "ollama";
   }
 
   return initChatModel(modelConfig.modelName, config);
