@@ -2,6 +2,8 @@ export interface IterationTokens {
   iteration: number;
   promptTokens: number;
   completionTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   totalTokens: number;
   apiCalls: number;
 }
@@ -30,6 +32,8 @@ export interface TokenUsageAccumulator {
   totals: {
     promptTokens: number;
     completionTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
     totalTokens: number;
     apiCalls: number;
   };
@@ -42,6 +46,8 @@ export function createTokenAccumulator(): TokenUsageAccumulator {
     totals: {
       promptTokens: 0,
       completionTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
       totalTokens: 0,
       apiCalls: 0,
     },
@@ -54,18 +60,24 @@ export function addIterationTokens(
   iteration: number,
   promptTokens: number,
   completionTokens: number,
-  apiCalls: number = 1
+  apiCalls: number = 1,
+  cacheReadTokens: number = 0,
+  cacheWriteTokens: number = 0
 ): void {
-  const totalTokens = promptTokens + completionTokens;
+  const totalTokens = promptTokens + completionTokens + cacheReadTokens + cacheWriteTokens;
   accumulator.iterations.push({
     iteration,
     promptTokens,
     completionTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
     totalTokens,
     apiCalls,
   });
   accumulator.totals.promptTokens += promptTokens;
   accumulator.totals.completionTokens += completionTokens;
+  accumulator.totals.cacheReadTokens += cacheReadTokens;
+  accumulator.totals.cacheWriteTokens += cacheWriteTokens;
   accumulator.totals.totalTokens += totalTokens;
   accumulator.totals.apiCalls += apiCalls;
 }

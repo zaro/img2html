@@ -32,7 +32,13 @@ class AgentCallbackHandler extends BaseCallbackHandler {
   name = "agent_callback_handler";
   private logger: Logger;
 
-  calls: Array<{ promptTokens: number; completionTokens: number; totalTokens: number }> = [];
+  calls: Array<{ 
+    promptTokens: number; 
+    completionTokens: number; 
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    totalTokens: number 
+  }> = [];
   log: Array<{
     step: number;
     direction: "to_llm" | "from_llm";
@@ -68,9 +74,11 @@ class AgentCallbackHandler extends BaseCallbackHandler {
     if (tokenUsage) {
       const promptTokens = tokenUsage.promptTokens ?? 0;
       const completionTokens = tokenUsage.completionTokens ?? 0;
-      const totalTokens = tokenUsage.totalTokens ?? (promptTokens + completionTokens);
-      this.calls.push({ promptTokens, completionTokens, totalTokens });
-      this.logger.log(`\n[API Call #${this.calls.length}] Prompt: ${promptTokens}, Completion: ${completionTokens}, Total: ${totalTokens}`);
+      const cacheReadTokens = tokenUsage.cacheReadInputTokens ?? tokenUsage.cacheReadTokens ?? 0;
+      const cacheWriteTokens = tokenUsage.cacheWriteInputTokens ?? tokenUsage.cacheWriteTokens ?? 0;
+      const totalTokens = tokenUsage.totalTokens ?? (promptTokens + completionTokens + cacheReadTokens + cacheWriteTokens);
+      this.calls.push({ promptTokens, completionTokens, cacheReadTokens, cacheWriteTokens, totalTokens });
+      this.logger.log(`\n[API Call #${this.calls.length}] Prompt: ${promptTokens}, Completion: ${completionTokens}, Cache Read: ${cacheReadTokens}, Cache Write: ${cacheWriteTokens}, Total: ${totalTokens}`);
     }
 
     const aiResponses: BaseMessage[] = [];
@@ -570,15 +578,25 @@ const createFileTool = tool(
 
     const totalPromptTokens = callbackHandler.calls.reduce((sum, c) => sum + c.promptTokens, 0);
     const totalCompletionTokens = callbackHandler.calls.reduce((sum, c) => sum + c.completionTokens, 0);
+    const totalCacheReadTokens = callbackHandler.calls.reduce((sum, c) => sum + c.cacheReadTokens, 0);
+    const totalCacheWriteTokens = callbackHandler.calls.reduce((sum, c) => sum + c.cacheWriteTokens, 0);
     const totalTokensAll = callbackHandler.calls.reduce((sum, c) => sum + c.totalTokens, 0);
     logger.log("\n\nStream completed");
     logger.log(`Total API calls: ${callbackHandler.calls.length}`);
     logger.log(`Total tool calls: ${toolCallCount}`);
-    logger.log(`Total tokens - Prompt: ${totalPromptTokens}, Completion: ${totalCompletionTokens}, Combined: ${totalTokensAll}`);
+    logger.log(`Total tokens - Prompt: ${totalPromptTokens}, Completion: ${totalCompletionTokens}, Cache Read: ${totalCacheReadTokens}, Cache Write: ${totalCacheWriteTokens}, Combined: ${totalTokensAll}`);
 
     for (let i = 0; i < callbackHandler.calls.length; i++) {
       const call = callbackHandler.calls[i];
-      addIterationTokens(tokenAccumulator, i + 1, call.promptTokens, call.completionTokens, 1);
+      addIterationTokens(
+        tokenAccumulator, 
+        i + 1, 
+        call.promptTokens, 
+        call.completionTokens, 
+        1,
+        call.cacheReadTokens,
+        call.cacheWriteTokens
+      );
     }
     tokenAccumulator.totals.apiCalls = callbackHandler.calls.length;
     tokenAccumulator.usageMetadata = callbackHandler.getUsageMetadata();

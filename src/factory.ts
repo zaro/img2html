@@ -148,6 +148,8 @@ export function writeTokensJson(
     pricing: {
       promptPer1M: number | null;
       completionPer1M: number | null;
+      cacheReadPer1M?: number | null;
+      cacheWritePer1M?: number | null;
     } | null;
     source: string;
   },
@@ -160,6 +162,8 @@ export function writeTokensJson(
       pricing: {
         promptPer1M: pricingInfo.pricing?.promptPer1M || null,
         completionPer1M: pricingInfo.pricing?.completionPer1M || null,
+        cacheReadPer1M: pricingInfo.pricing?.cacheReadPer1M || null,
+        cacheWritePer1M: pricingInfo.pricing?.cacheWritePer1M || null,
         currency: "USD",
         source: pricingInfo.source,
       },
@@ -183,6 +187,8 @@ export function printTokenSummary(
     pricing: {
       promptPer1M: number | null;
       completionPer1M: number | null;
+      cacheReadPer1M?: number | null;
+      cacheWritePer1M?: number | null;
     } | null;
     source: string;
   },
@@ -191,10 +197,16 @@ export function printTokenSummary(
   const { totals } = tokenUsage;
 
   logger.log("\nTokens used:");
-  logger.log(`  API calls:        ${totals.apiCalls}`);
+  logger.log(`  API calls:         ${totals.apiCalls}`);
   logger.log(`  Prompt tokens:     ${formatTokenCount(totals.promptTokens)}`);
   logger.log(
     `  Completion tokens: ${formatTokenCount(totals.completionTokens)}`,
+  );
+  logger.log(
+    `  Cache read tokens: ${formatTokenCount(totals.cacheReadTokens)}`,
+  );
+  logger.log(
+    `  Cache write tokens: ${formatTokenCount(totals.cacheWriteTokens)}`,
   );
   logger.log(`  Total tokens:      ${formatTokenCount(totals.totalTokens)}`);
 
